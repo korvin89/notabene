@@ -1,0 +1,64 @@
+# Mage
+
+A turn-based grid roguelike where **movement is casting**. You never aim or select a
+spell — every spell hangs off a trigger, so your turn is a routing decision: which path
+through the crowd sets off the most magic.
+
+Survive 400 turns.
+
+Design: [DESIGN.md](./DESIGN.md) · Work breakdown: [tickets.md](./tickets.md) ·
+Tuning: [BALANCE.md](./BALANCE.md)
+
+## Running it
+
+```sh
+npm install
+npm run dev        # http://localhost:5173
+```
+
+`?seed=abc` replays a run exactly. Without one, a seed is invented and written into the
+URL so any run can be replayed from the address bar.
+
+```sh
+npm test           # 328 tests
+npm run typecheck
+npm run build
+npm run balance    # plays 12 seeds under 4 policies, prints win rates
+```
+
+## Controls
+
+| | |
+|---|---|
+| Move | arrows, numpad, or vi keys (`hjkl` + `yubn`) — eight directions |
+| Bump attack | walk into an enemy |
+| Blink | **Shift** + a direction: 4 tiles, 8-turn cooldown |
+| Level-up cards | `1`–`4` choose · `R` reroll · `Space` skip for a small heal |
+| New run | `Space` on the results screen |
+| Debug overlay | `F1` |
+
+With the overlay open: `E` spawn an enemy · `R` cycle its kind · click a tile to spawn
+there or click an actor to apply a status · `S` cycle status · `A` apply it to everyone ·
+`T` jump 50 turns · `M` jump to any turn · `V` force a level-up · `G` god mode ·
+`P` single-step · `.` step once · `C` clear enemies. (Debug keys avoid `hjkl`/`yubn` so
+the overlay stays usable while you play.)
+
+## Layout
+
+```
+src/
+  core/     grid, seeded RNG, arena generation, energy scheduler, flow field
+  data/     all content as typed modules — spells, passives, enemies, statuses, timeline
+  game/     the model: World, triggers, casting, shapes, ground, cards, spawner
+  render/   canvas renderer, animation queue, the juice vocabulary, HUD and screens
+  debug/    the F1 overlay other systems register readouts and hotkeys into
+  sim/      headless bot and the balance harness behind `npm run balance`
+```
+
+Two rules shape the whole thing:
+
+- **All content is data.** The caster branches on shape and targeting, never on a spell's
+  name; a ninth spell is a ninth record in `data/spells.ts`.
+- **The model never waits on the screen.** A turn resolves the instant input arrives and
+  emits events; the visual layer replays them, compressing when it falls behind and
+  snapping when it falls far behind. Input is never gated on an animation.

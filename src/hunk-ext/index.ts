@@ -1,0 +1,287 @@
+// Our hunk extension (T5): per-turn changesets + comment mirror + turn
+// switching. Loaded by the viewer: `hunk diff --extension src/hunk-ext`.
+//
+// The file is deliberately self-contained: the hunk loader executes it and our
+// modules are unavailable to it, so the handoff/notes schemas are duplicated
+// here structurally (the canon is src/hunk/handoff.ts and src/hunk/notes.ts;
+// test/hunk-ext.test.ts guards the sync). hunk's Extension API is experimental —
+// the hunkdiff version is pinned exactly in package.json.
+//
+// Three parts:
+// 1. VCS adapter: turn patches from the handoff file (path in the
+//    NOTABENE_HANDOFF env var), the turn label with a snippet — in `title`.
+//    Mechanics verified in T1b.
+// 2. Comment mirror — schema verified by a live run of flow B
+//    (DECISIONS.md D19): path/sides/ranges from note_created/note_edited,
+//    set membership and deletions from note_changed, joined by id, flushed on
+//    shutdown (250 ms budget) — plus a write on every event so we don't depend
+//    on it.
+// 3. Turn switching: `<`/`>` — adjacent turn, `T` — pick from a list; the
+//    mechanism is `hunk session reload --repo … -- diff <id>` (verified in
+//    T1b); the new range comes back into load() of our own adapter.
+
+import { execFile } from "node:child_process";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import process from "node:process";
+import type {
+	ExtensionCommandContext,
+	ExtensionReviewNote,
+	ExtensionVcsFileSourceRequest,
+	HunkExtensionAPI,
+} from "hunkdiff/extension";
+
+// ── structural copies of the schemas (canon — src/hunk/handoff.ts, src/hunk/notes.ts) ──
+
+interface HandoffFile {
+	path: string;
+	previousPath?: string;
+	oldText: string | null;
+	newText: string | null;
+}
+
+interface HandoffChangeset {
+	id: string;
+	label: string;
+	patchText: string;
+	files: HandoffFile[];
+}
+
+interface Handoff {
+	version: number;
+	root: string;
+	notesPath: string;
+	hunkBin: string;
+	activeId: string;
+	changesets: HandoffChangeset[];
+}
+
+interface MirrorNote {
+	id: string;
+	source: string;
+	file: string | null;
+	side: "old" | "new" | null;
+	oldRange: readonly [number, number] | null;
+	newRange: readonly [number, number] | null;
+	body: string;
+}
+
+/** A "for the user" error: hunk recognizes it structurally, by name (no import). */
+function userError(message: string, suggestions: string[]): Error {
+	return Object.assign(new Error(message), { name: "HunkExtensionUserError", suggestions });
+}
+
+export default function claudeDiffExtension(hunk: HunkExtensionAPI): void {
+	const handoffPath = process.env["NOTABENE_HANDOFF"];
+	if (handoffPath === undefined || handoffPath === "") {
+		// A regular hunk run without our CLI — silently stay out of the way.
+		return;
+	}
+
+	let handoff: Handoff;
+	try {
+		handoff = JSON.parse(readFileSync(handoffPath, "utf8")) as Handoff;
+	} catch (error) {
+		hunk.log(`notabene: failed to read handoff (${handoffPath}): ${String(error)}`);
+		return;
+	}
+	if (handoff.version !== 1 || !Array.isArray(handoff.changesets) || handoff.changesets.length === 0) {
+		hunk.log("notabene: handoff has an unknown schema — extension disabled");
+		return;
+	}
+
+	const ids = handoff.changesets.map((changeset) => changeset.id);
+	let activeId = ids.includes(handoff.activeId) ? handoff.activeId : (ids[0] as string);
+
+	// ── 1. VCS adapter ──────────────────────────────────────────────────────
+
+	hunk.registerVcsAdapter({
+		id: "notabene",
+		name: "notabene",
+		// Above the built-in git (baseline 0): on the same root we win.
+		detectionPriority: 100,
+		detect: () => ({ id: "notabene", repoRoot: handoff.root }),
+		operations: {
+			"working-tree-diff": {
+				load: async (input) => {
+					const wanted = input.range ?? activeId;
+					const changeset = handoff.changesets.find((candidate) => candidate.id === wanted);
+					if (changeset === undefined) {
+						throw userError(`notabene: there is no turn "${wanted}" in this review.`, [
+							`Available: ${ids.join(", ")}.`,
+							"Switching: < and > — adjacent turn, T — list.",
+						]);
+					}
+					activeId = changeset.id;
+					return {
+						repoRoot: handoff.root,
+						sourceLabel: `notabene: ${changeset.id}`,
+						title: changeset.label,
+						patchText: changeset.patchText,
+						readFileSource: async (request: ExtensionVcsFileSourceRequest) => {
+							const file = changeset.files.find((candidate) => candidate.path === request.path);
+							if (file === undefined) return null;
+							return (request.side === "old" ? file.oldText : file.newText) ?? null;
+						},
+					};
+				},
+			},
+		},
+	});
+
+	// ── 2. Comment mirror ───────────────────────────────────────────────────
+
+	/** id → file path from the events that carry a path at all */
+	const paths = new Map<string, string>();
+	/** id → entry; insertion order = creation order */
+	const rows = new Map<string, MirrorNote>();
+
+	const flush = (): void => {
+		const out = [...rows.values()].map((row) => ({ ...row, file: row.file ?? paths.get(row.id) ?? null }));
+		// Via a temp file: a hunk killed mid-write would otherwise leave
+		// truncated JSON, and to the CLI that is indistinguishable from
+		// "there were no comments".
+		const tmp = `${handoff.notesPath}.tmp`;
+		try {
+			writeFileSync(tmp, `${JSON.stringify(out, null, 2)}\n`);
+			renameSync(tmp, handoff.notesPath);
+		} catch (error) {
+			hunk.log(`notabene: failed to write the mirror (${handoff.notesPath}): ${String(error)}`);
+		}
+	};
+	try {
+		mkdirSync(dirname(handoff.notesPath), { recursive: true });
+	} catch {
+		// flush() will complain itself if the directory still is not there
+	}
+
+	// The mirror may be left over from a previous opening of the SAME review
+	// (flow C: `open`, q, remembered one more point, `open` again) — it must
+	// be continued, not reset: hunk's memory no longer holds the previous
+	// session's comments.
+	try {
+		const previous = JSON.parse(readFileSync(handoff.notesPath, "utf8")) as MirrorNote[];
+		if (Array.isArray(previous)) {
+			for (const row of previous) {
+				if (row === null || typeof row !== "object" || typeof row.id !== "string") continue;
+				rows.set(row.id, row);
+				if (typeof row.file === "string") paths.set(row.id, row.file);
+			}
+		}
+	} catch {
+		// no mirror (the usual case) or it is broken — start from a clean slate
+	}
+	// The file is in place right away: to the CLI it is the "extension loaded" marker.
+	flush();
+
+	// The path and exact coordinates live here. draft: true — a draft still being typed.
+	const remember = (note: ExtensionReviewNote): void => {
+		if (note.draft) return;
+		paths.set(note.id, note.filePath);
+		const prev = rows.get(note.id);
+		rows.set(note.id, {
+			id: note.id,
+			source: prev?.source ?? "user",
+			file: note.filePath,
+			side: note.side,
+			oldRange: note.oldRange ?? null,
+			newRange: note.newRange ?? null,
+			body: note.body,
+		});
+		flush();
+	};
+
+	hunk.on("note_created", (payload) => remember(payload.note));
+	hunk.on("note_edited", (payload) => remember(payload.note));
+
+	// The authoritative ReviewStore set: creations, edits and DELETIONS.
+	hunk.on("note_changed", (payload) => {
+		if (payload.kind === "removed") {
+			rows.delete(payload.note.id);
+			paths.delete(payload.note.id);
+		} else {
+			const prev = rows.get(payload.note.id);
+			rows.set(payload.note.id, {
+				id: payload.note.id,
+				source: payload.note.source,
+				file: prev?.file ?? paths.get(payload.note.id) ?? null,
+				side: prev?.side ?? payload.note.anchor.preferred?.side ?? null,
+				oldRange: payload.note.anchor.oldRange ?? prev?.oldRange ?? null,
+				newRange: payload.note.anchor.newRange ?? prev?.newRange ?? null,
+				body: prev?.body ?? payload.note.summary,
+			});
+		}
+		flush();
+	});
+
+	hunk.on("shutdown", () => flush());
+
+	// ── 3. Turn switching ───────────────────────────────────────────────────
+
+	// `session reload --repo <path>` does NOT find the session with a VCS
+	// adapter: in the daemon registry repoRoot holds our sourceLabel, not the
+	// path (found by a live run in T5). So we look up our own session by pid —
+	// the extension lives in the hunk process itself, and `session list --json`
+	// reports that pid.
+	let cachedSid: string | null = null;
+	const resolveSid = (): Promise<string | null> =>
+		new Promise((resolve) => {
+			if (cachedSid !== null) {
+				resolve(cachedSid);
+				return;
+			}
+			execFile(handoff.hunkBin, ["session", "list", "--json"], (error, stdout) => {
+				if (error !== null) {
+					resolve(null);
+					return;
+				}
+				try {
+					const sessions = (JSON.parse(stdout) as { sessions?: { sessionId?: string; pid?: number; cwd?: string }[] })
+						.sessions ?? [];
+					const own = sessions.find((session) => session.pid === process.pid)
+						?? sessions.find((session) => session.cwd === handoff.root);
+					cachedSid = own?.sessionId ?? null;
+					resolve(cachedSid);
+				} catch {
+					resolve(null);
+				}
+			});
+		});
+
+	const reload = async (ctx: ExtensionCommandContext, targetId: string): Promise<void> => {
+		const sid = await resolveSid();
+		if (sid === null) {
+			ctx.notify("notabene: could not find my session in the hunk daemon — cannot switch turns", "error");
+			return;
+		}
+		await new Promise<void>((resolve) => {
+			execFile(handoff.hunkBin, ["session", "reload", sid, "--json", "--", "diff", targetId], (error) => {
+				if (error !== null) {
+					ctx.notify(`notabene: failed to switch turn: ${error.message}`, "error");
+				}
+				resolve();
+			});
+		});
+	};
+
+	const step = (ctx: ExtensionCommandContext, delta: number): Promise<void> => {
+		const index = ids.indexOf(activeId) + delta;
+		if (index < 0 || index >= ids.length) {
+			ctx.notify(delta > 0 ? "notabene: this is the oldest turn" : "notabene: this is the newest turn");
+			return Promise.resolve();
+		}
+		return reload(ctx, ids[index] as string);
+	};
+
+	// The list is sorted newest first (current, Tn, …, T1):
+	// `<` — toward newer, `>` — toward older. hunk's `,`/`.` are taken by files.
+	hunk.registerCommand({ id: "prevTurn", title: "Newer turn", key: "<" }, (ctx) => step(ctx, -1));
+	hunk.registerCommand({ id: "nextTurn", title: "Older turn", key: ">" }, (ctx) => step(ctx, 1));
+	hunk.registerCommand({ id: "pickTurn", title: "Pick a turn", key: "T" }, async (ctx) => {
+		const labels = handoff.changesets.map((changeset) => changeset.label);
+		const chosen = await ctx.dialogs.select({ title: "Which diff to show?", options: labels });
+		if (chosen === null) return;
+		const index = labels.indexOf(chosen);
+		if (index >= 0) await reload(ctx, ids[index] as string);
+	});
+}

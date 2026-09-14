@@ -1,0 +1,18 @@
+# Review artifacts (machine-readable copies, ARCHITECTURE.md §3.2)
+.claude/reviews/
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+npm-debug.log*
+
+# Rust (in case of stack variant B)
+target/
+
+# Spike sandboxes (T1) — not part of the product
+tmp/
+spike-tmp/
+
+# OS
+.DS_Store

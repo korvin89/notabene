@@ -1,0 +1,24 @@
+Review of the turn T3 diff ("fix the dagger balance, knockback…"), 4 comments.
+Address each item; make the edits, then briefly summarize: what you changed,
+what you skipped and why. If an item is unclear, ask a clarifying question about it.
+
+1. @src/weapons.ts:42-48 [change]
+   Knockback is hardcoded — move it into WEAPON_CONFIG.
+   >   const KNOCKBACK = 4;
+   >   applyKnockback(target, KNOCKBACK);
+
+2. @src/balance.md:10 [question] (deleted line, old:10)
+   Why was the crit item removed? It had been agreed on.
+   > - crit: 2x on daggers
+
+3. @src/weapons.ts:90 [blocker]
+   This breaks old profile saves.
+
+4. @src/save/profile.ts:17-19 [change] (deleted lines, old:17-19)
+   The old-profile migration should be restored:
+   without it, pre-v3 saves are silently lost.
+   >   if (profile.version < 3) {
+   >     migrate(profile);
+   >   }
+
+Machine-readable copy: .claude/reviews/2026-09-13T20-15-31.json

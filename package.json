@@ -1,0 +1,25 @@
+{
+  "name": "notabene",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Terminal diff review for Claude Code: your comments on the agent's turn go back into its context as a batch",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "bin": {
+    "ntb": "./ntb",
+    "notabene": "./ntb"
+  },
+  "scripts": {
+    "test": "node --test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "typescript": "^5.9.0"
+  },
+  "dependencies": {
+    "hunkdiff": "0.22.0"
+  }
+}

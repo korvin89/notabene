@@ -1,0 +1,28 @@
+#!/bin/sh
+# The single entry point. It is run as `!ntb` inside a Claude Code session,
+# hence: no build step and no writes to stdout. The installer symlinks it into a
+# bin directory as both `ntb` and `notabene`.
+#
+# Node 22.18+ runs TypeScript directly (type stripping), so no dist/ is needed —
+# after `git clone` this file works as is.
+set -e
+
+# Project directory path — via this script itself, resolving symlinks
+# (the installer symlinks it into a bin directory on PATH).
+src=$0
+while [ -L "$src" ]; do
+	dir=$(CDPATH= cd -- "$(dirname -- "$src")" && pwd -P)
+	src=$(readlink "$src")
+	case $src in
+	/*) ;;
+	*) src=$dir/$src ;;
+	esac
+done
+root=$(CDPATH= cd -- "$(dirname -- "$src")" && pwd -P)
+
+if ! command -v node >/dev/null 2>&1; then
+	echo "ntb: node not found (need 22.18+; see README)" >&2
+	exit 127
+fi
+
+exec node "$root/src/cli.ts" "$@"
