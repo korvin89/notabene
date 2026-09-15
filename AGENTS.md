@@ -103,4 +103,7 @@ pointers to "when and in what context this appeared".
   and code comments are written in English — including new DECISIONS entries
   and in-place amendments to spike docs. CLI output and the stdout batch are in
   English as well.
-- Before committing: `npm test` and `npm run typecheck` green.
+- Before committing: `npm test` and `npm run typecheck` green. The same two
+  commands run on every pull request and on `main`
+  (`.github/workflows/ci.yml`, Linux and macOS, node 22.18.0 and 24) — CI adds
+  nothing that cannot be reproduced locally.
