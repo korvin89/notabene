@@ -1,6 +1,6 @@
 {
   "name": "notabene",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Terminal diff review for Claude Code: your comments on the agent's turn go back into its context as a batch",
   "type": "module",
