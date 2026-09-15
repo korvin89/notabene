@@ -427,6 +427,24 @@ configured as rulesets): the release pull request touches version and changelog
 files only, and CI runs on `main` immediately after the merge. Protecting `main`
 means giving the release job a PAT or a GitHub App token in the same change.
 
+**Amendment, 2026-09-16.** The paragraph above is wrong on its facts: the release
+pull request *is* checked. The first real one (#4) got the full matrix from run
+`35031129736`, `event: pull_request` on
+`release-please--branches--main--components--notabene` — the documented
+"resources created with `GITHUB_TOKEN` do not trigger workflows" behaviour did not
+hold for it. That is lucky rather than merely tidy: this run is what caught
+`test/install.test.ts` asserting on a version it had inherited from the
+repository's own `package.json`, which broke the moment release-please bumped it.
+A PAT is therefore only about branch protection, not about getting checks to run.
+
+What *did* need changing was a repository setting: with
+`can_approve_pull_request_reviews: false` (the default) release-please created its
+branch and its commit and then failed with "GitHub Actions is not permitted to
+create or approve pull requests". It is now enabled; `default_workflow_permissions`
+stays `read`, so every workflow still declares the scopes it needs. Requiring
+approvals on `main` later means revisiting this, since the same setting is what
+lets a workflow approve pull requests.
+
 ### D28. Complete and Cancel are commands of ours; delivery stays the default outcome
 2026-09-15 · in effect
 

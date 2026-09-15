@@ -31,9 +31,23 @@ function git(cwd: string, args: string[]): string {
 	});
 }
 
+/** The version a fresh fixture starts at, whatever this repository is at. */
+const FIXTURE_VERSION = "0.1.0";
+
+function setVersion(remote: string, version: string): void {
+	const manifest = JSON.parse(readFileSync(join(remote, "package.json"), "utf8")) as Record<string, unknown>;
+	manifest["version"] = version;
+	writeFileSync(join(remote, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
 /**
  * A remote carrying the real product files — `src/update.ts` under test is the
  * installed copy, not this repository's.
+ *
+ * The copied `package.json` gets an explicit version, because these tests assert
+ * on what `ntb --version` prints: inheriting the repository's own version made
+ * them pass only while it happened to be `0.1.0`, and they broke the moment
+ * release-please bumped it (ARCHITECTURE.md §7.1 — the version moves on its own now).
  */
 function makeRemote(name: string, options: { tag?: string } = {}): string {
 	const remote = join(WORK, name);
@@ -44,6 +58,7 @@ function makeRemote(name: string, options: { tag?: string } = {}): string {
 	}
 	cpSync(join(REPO_ROOT, "src"), join(remote, "src"), { recursive: true });
 	chmodSync(join(remote, "ntb"), 0o755);
+	setVersion(remote, FIXTURE_VERSION);
 	git(remote, ["add", "-A"]);
 	git(remote, ["commit", "--quiet", "-m", "initial"]);
 	if (options.tag !== undefined) git(remote, ["tag", options.tag]);
@@ -52,9 +67,7 @@ function makeRemote(name: string, options: { tag?: string } = {}): string {
 
 /** Publishes a new version on the remote: bumps package.json and tags it. */
 function release(remote: string, version: string, tag: string): void {
-	const manifest = JSON.parse(readFileSync(join(remote, "package.json"), "utf8")) as Record<string, unknown>;
-	manifest["version"] = version;
-	writeFileSync(join(remote, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+	setVersion(remote, version);
 	git(remote, ["add", "-A"]);
 	git(remote, ["commit", "--quiet", "-m", version]);
 	git(remote, ["tag", tag]);
