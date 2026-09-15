@@ -100,8 +100,10 @@ pointers to "when and in what context this appeared".
   the format; renames, moves and backlogs fail it. Old entries are not rewritten
   retroactively once the repository is pushed.
 - Changing the design — update ARCHITECTURE.md in the same commit.
-- Commit messages are Conventional Commits, scoped by module where it helps:
-  `feat(diff): …`, `fix(hunk): …`, `ci: …`. They are the release input, not
+- Commit messages are Conventional Commits, scoped by area where it helps —
+  `cli`, `tui` (the viewer: extension, handoff, keys), `diff`, `session`,
+  `launcher`, `delivery`, `install`, `update`: `feat(diff): …`, `fix(tui): …`,
+  `ci: …`. They are the release input, not
   decoration — `feat` moves the minor, `fix`/`perf` the patch, a `!` or a
   `BREAKING CHANGE:` footer the minor while we are below 1.0, and everything else
   ships without a release (ARCHITECTURE.md §7.1). Pull requests are squash-merged,

@@ -100,8 +100,12 @@ Herdr — an adjacent pane. The pane deliberately stays open after the review: t
 next `!ntb` finds it by the name "notabene" and reloads it instead of
 spawning more splits (don't need it — close it by hand, the next run recreates
 it). In the viewer: `c` — comment, `<` / `>` / `T` — turn switching
-(Current / T1..Tn with prompt snippets), `q` — quit. After quitting, the batch
-is printed to stdout and lands in the context — Claude responds to each item.
+(Current / T1..Tn with prompt snippets), `C` — complete the review, `x` — cancel
+it, `q` — quit. The two finishing keys are repeated in the menu bar next to the
+turn's name, and all five sit in the `F10` menu under Extensions. Completing and quitting do the same thing: the batch is printed
+to stdout and lands in the context, and Claude responds to each item. Cancelling
+is the way out with nothing delivered — it asks first if you have already written
+comments, and then the review is gone: no batch, no JSON copy.
 
 Reviewing a specific turn: `!ntb --turn 3` (or `--turn T3`).
 
@@ -139,7 +143,7 @@ explicit `--launcher manual`):
 then in any other terminal:
 
 ```
-ntb open                # the viewer right here; comments, q
+ntb open                # the viewer right here; comments, then C (or q)
 ```
 
 and back in the session:

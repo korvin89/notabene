@@ -327,6 +327,57 @@ describe("flow C end to end, headless (T5 DoD: comments are available programmat
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	test("a review cancelled in the viewer (x) delivers nothing, comments and all", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "notabene-cancel-"));
+		try {
+			execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir, stdio: "ignore" });
+			writeFileSync(join(dir, "new.txt"), "first\nsecond\n");
+			assert.equal((await cli([], { env: sessionEnv(), cwd: dir, detached: true })).code, 0);
+
+			// The stub does what the extension's Cancel does: the comments are in
+			// the mirror, and next to it the outcome marker.
+			const notes = JSON.stringify([
+				{ id: "user:1-1", source: "user", file: "new.txt", side: "new", oldRange: null, newRange: [2, 2], body: "never mind" },
+			]);
+			const viewer = join(dir, "viewer-cancel.sh");
+			const outcome = mirrorOf(dir).replace(/\.json$/, ".outcome.json");
+			writeFileSync(
+				viewer,
+				`#!/bin/sh\nprintf %s '${notes}' > "${mirrorOf(dir)}"\n`
+					+ `printf %s '{"version":1,"outcome":"cancelled"}' > "${outcome}"\n`,
+			);
+			chmodSync(viewer, 0o755);
+			const open = await cli(["open"], {
+				env: {
+					PATH: process.env["PATH"] ?? "",
+					CLAUDE_CONFIG_DIR: claudeFixture().claudeDir,
+					NOTABENE_TTY: "1",
+					NOTABENE_HUNK: viewer,
+				},
+				cwd: dir,
+			});
+			assert.equal(open.code, 0);
+
+			const collect = await cli(["collect"], { env: sessionEnv(), cwd: dir, detached: true });
+			assert.equal(collect.code, 0);
+			assert.equal(collect.stdout, "", "a cancelled review must not reach Claude");
+			assert.match(collect.stderr, /cancelled/i);
+			assert.match(collect.stderr, /1 comment discarded/);
+
+			// The session is closed exactly as a delivered one, minus the JSON copy:
+			// nothing was reviewed, so there is no history to keep.
+			const reviews = join(dir, ".claude", "reviews");
+			assert.deepEqual(readdirSync(reviews), [], "handoff, pending, mirror and marker must be gone");
+
+			// and there is nothing left to collect a second time
+			const again = await cli(["collect"], { env: sessionEnv(), cwd: dir });
+			assert.equal(again.code, 1);
+			assert.match(again.stderr, /nothing to collect/);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("Ctrl-C in the flow C viewer", () => {

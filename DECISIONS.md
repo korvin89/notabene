@@ -426,3 +426,54 @@ acceptable while `main` has no required checks (it has none today, and none are
 configured as rulesets): the release pull request touches version and changelog
 files only, and CI runs on `main` immediately after the merge. Protecting `main`
 means giving the release job a PAT or a GitHub App token in the same change.
+
+### D28. Complete and Cancel are commands of ours; delivery stays the default outcome
+2026-09-15 · in effect
+
+The viewer gets two finishing commands: `C` completes the review (flush, quit —
+the comments go to Claude) and `x`/`X` cancels it, asking for confirmation when
+comments exist and writing `notes-<stamp>.outcome.json` (§3.3), which the CLI
+reads before delivering anything. Quitting any other way — `q`, a closed window,
+a kill — still delivers, exactly as before the commands existed.
+
+**Why `q` is not the cancel key**, which is where this started. An extension
+cannot take a chord that a built-in already owns: in hunkdiff 0.22.0
+`buildExtensionAppCommands` probes every declared chord against the built-ins and
+against chords already claimed by other extension commands, and on a hit it pushes
+the chord to `conflicts` and *skips the binding* — the command is still
+registered, just with no key, and the host reports the conflict. `hunk.app.quit`
+owns `q` (`defaultKeys: ["q"]`, `locus: "host-only"`). So "`q` means cancel" could
+only be built by inverting the CLI: deliver *only* on an explicit Complete. That
+was rejected — it turns the habitual exit into silent destruction of a review's
+worth of work, and the one place a confirmation would help is the one place we
+cannot put it, since `q` never reaches us.
+
+**What made the commands possible at all.** `hunk.app.quit` is
+`publicToExtensions: true`, so `ctx.commands.execute("hunk.app.quit")` closes the
+viewer from a command handler; a `false` return is treated as "the host refused"
+and the user is told to press `q`. `c` was unavailable for Complete
+(`hunk.review.startNote`), hence the capital `C`; `x` was free.
+
+**Where the keys are advertised.** In the review title, which hunk paints into the
+menu bar — because nothing else is both ours and always on screen. The `?` help is
+built by `buildHelpSections` from a hardcoded `HELP_SECTIONS` list of built-in
+command ids, so an extension command can never appear there; the menu *does* pick
+ours up automatically (`toExtensionMenuEntries` files them under `Extensions`,
+`MENU_LABELS`), but only once the user opens it. The title is rendered muted on the
+right of the menu bar (`showMenuBar: true` by default), hunk appends its own file
+and line counts after it, and the whole string is clipped by `fitText` — so the
+hint is kept to `[C] complete  [x] cancel`, bracketed so that it reads as keys
+rather than as part of the changeset's name. It is static text: a rebinding through
+hunk's `[keybindings]` config would make it lie, which is the price of the only
+visible slot available.
+
+**Consequences.** The marker is per-review and named after its mirror, so
+reopening the same review (flow C) must clear it — otherwise a cancellation
+would outlive the opening it belonged to. A cancelled review leaves no
+machine-readable copy: nothing was reviewed, so there is no history to keep.
+A docked pane (`registerPane`) would give real, clickable buttons and was left
+alone deliberately: its component is typed `(props) => unknown` — a React/OpenTUI
+node — so it would mean rendering through hunk internals that no published type
+covers, plus a `react` import that is only in our tree as hunkdiff's transitive
+dependency (§6 allows one runtime dependency, and this would be a second, implicit
+one). `onActivate` reports a click somewhere in the pane, not on a button.

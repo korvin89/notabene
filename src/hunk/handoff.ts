@@ -40,6 +40,12 @@ export interface HunkHandoff {
 	root: string;
 	/** where the extension mirrors comments */
 	notesPath: string;
+	/**
+	 * Where the extension records a cancelled review (`Cancel`, `x` in the
+	 * viewer). Absent file = the review ran to its end: quitting the viewer the
+	 * ordinary way still delivers the comments.
+	 */
+	outcomePath: string;
 	/** platform hunk binary — for the extension's `session reload` */
 	hunkBin: string;
 	/** id of the changeset to open first */
@@ -59,7 +65,11 @@ export function notesPath(cwd: string): string {
 	return join(reviewsDir(cwd), "notes.json");
 }
 
-/** Mirrors of every generation: the legacy name, the review-stamped name and the temp write file. */
+/**
+ * Mirrors of every generation: the legacy name, the review-stamped name, the
+ * temp write file — and the outcome marker, which is named after its mirror
+ * (`notes-<stamp>.outcome.json`) precisely so that this one pattern clears it too.
+ */
 const NOTES_PATTERN = /^notes(-.*)?\.json(\.tmp)?$/;
 
 function removeMirrors(dir: string): void {
@@ -104,6 +114,42 @@ export function mirrorPath(cwd: string): string {
 	return readHandoff(cwd)?.notesPath ?? notesPath(cwd);
 }
 
+/** Marker of a review the user cancelled in the viewer; named after its mirror. */
+function outcomePathFor(notes: string): string {
+	return notes.replace(/\.json$/, ".outcome.json");
+}
+
+/** What the extension writes into the marker; a missing file means "not cancelled". */
+interface ReviewOutcome {
+	version: 1;
+	outcome: "cancelled";
+}
+
+/**
+ * Did the user cancel this review in the viewer?
+ *
+ * Only an explicit `Cancel` writes the marker — an ordinary quit (`q`, a closed
+ * window, a killed process) leaves none and keeps the pre-existing behaviour,
+ * which is to deliver whatever comments were written. A file we cannot parse is
+ * treated as no cancellation: losing a review to a corrupted byte would be worse
+ * than delivering comments the user meant to drop.
+ */
+export function reviewCancelled(cwd: string): boolean {
+	const handoff = readHandoff(cwd);
+	const path = handoff?.outcomePath ?? outcomePathFor(handoff?.notesPath ?? notesPath(cwd));
+	let raw: string;
+	try {
+		raw = readFileSync(path, "utf8");
+	} catch {
+		return false;
+	}
+	try {
+		return (JSON.parse(raw) as Partial<ReviewOutcome>).outcome === "cancelled";
+	} catch {
+		return false;
+	}
+}
+
 function toHandoffChangeset(changeset: Changeset): HandoffChangeset {
 	return {
 		id: changeset.id,
@@ -132,10 +178,12 @@ export function writeHandoff(
 	// live viewer, if one is still open, simply recreates its own — on the next flush.
 	removeMirrors(dir);
 
+	const notes = notesPathFor(cwd, options.stamp);
 	const handoff: HunkHandoff = {
 		version: 1,
 		root: cwd,
-		notesPath: notesPathFor(cwd, options.stamp),
+		notesPath: notes,
+		outcomePath: outcomePathFor(notes),
 		hunkBin: options.hunkBin,
 		activeId: options.activeId,
 		changesets: options.changesets.map(toHandoffChangeset),

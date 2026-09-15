@@ -63,14 +63,14 @@ export function manualLauncher(ctx: LauncherContext): Launcher {
 
 		async open(options: OpenOptions): Promise<void> {
 			if (isInteractive(options.env)) {
-				log.info(`Opening ${options.label} in hunk (c — comment, < > T — turns, q — quit)…`);
+				log.info(`Opening ${options.label} in hunk (c — comment, < > T — turns, C — complete, x — cancel)…`);
 				await runViewerHere(options);
 				return;
 			}
 			log.info(
 				"No terminal here — open the viewer in any other one:\n\n"
 					+ `    cd ${options.cwd} && ${ntbCommand(options.env)} open\n\n`
-					+ "Leave comments in hunk (c — comment, q — quit).",
+					+ "Leave comments in hunk (c — comment, C — complete, x — cancel).",
 			);
 		},
 

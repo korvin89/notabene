@@ -7,7 +7,7 @@
 // test/hunk-ext.test.ts guards the sync). hunk's Extension API is experimental —
 // the hunkdiff version is pinned exactly in package.json.
 //
-// Three parts:
+// Four parts:
 // 1. VCS adapter: turn patches from the handoff file (path in the
 //    NOTABENE_HANDOFF env var), the turn label with a snippet — in `title`.
 //    Mechanics verified in T1b.
@@ -19,9 +19,12 @@
 // 3. Turn switching: `<`/`>` — adjacent turn, `T` — pick from a list; the
 //    mechanism is `hunk session reload --repo … -- diff <id>` (verified in
 //    T1b); the new range comes back into load() of our own adapter.
+// 4. Finishing: `C` — complete (the comments go to Claude, same as quitting),
+//    `x` — cancel, which asks for confirmation and writes the outcome marker
+//    the CLI reads (DECISIONS.md D28).
 
 import { execFile } from "node:child_process";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import process from "node:process";
 import type {
@@ -51,6 +54,7 @@ interface Handoff {
 	version: number;
 	root: string;
 	notesPath: string;
+	outcomePath?: string;
 	hunkBin: string;
 	activeId: string;
 	changesets: HandoffChangeset[];
@@ -95,6 +99,16 @@ export default function claudeDiffExtension(hunk: HunkExtensionAPI): void {
 
 	// ── 1. VCS adapter ──────────────────────────────────────────────────────
 
+	/**
+	 * Rides along in the review title, which hunk paints in the menu bar (muted,
+	 * right-hand side, shown by default) — the only always-visible place an
+	 * extension can reach: the `?` help is built from a fixed list of built-in
+	 * commands, and the menu shows ours only once it is open (DECISIONS.md D28).
+	 * hunk appends its own file and line counts after this and clips the end, so
+	 * the hint stays short.
+	 */
+	const KEYS_HINT = "[C] complete  [x] cancel";
+
 	hunk.registerVcsAdapter({
 		id: "notabene",
 		name: "notabene",
@@ -116,7 +130,7 @@ export default function claudeDiffExtension(hunk: HunkExtensionAPI): void {
 					return {
 						repoRoot: handoff.root,
 						sourceLabel: `notabene: ${changeset.id}`,
-						title: changeset.label,
+						title: `${changeset.label}  ${KEYS_HINT}`,
 						patchText: changeset.patchText,
 						readFileSource: async (request: ExtensionVcsFileSourceRequest) => {
 							const file = changeset.files.find((candidate) => candidate.path === request.path);
@@ -284,4 +298,59 @@ export default function claudeDiffExtension(hunk: HunkExtensionAPI): void {
 		const index = labels.indexOf(chosen);
 		if (index >= 0) await reload(ctx, ids[index] as string);
 	});
+
+	// ── 4. Finishing the review ─────────────────────────────────────────────
+
+	// Only an explicit Cancel writes the marker the CLI reads; quitting any other
+	// way (`q`, a closed window, a kill) still delivers the comments, as it did
+	// before these two commands existed. `q` cannot be taken over: a chord already
+	// owned by a built-in is dropped from an extension command with a warning
+	// (hunk's buildExtensionAppCommands), and `hunk.app.quit` owns `q`.
+	const outcomePath = handoff.outcomePath ?? handoff.notesPath.replace(/\.json$/, ".outcome.json");
+
+	// A marker from a previous opening of the SAME review (flow C: cancel, then
+	// `ntb open` again) must not decide this one.
+	rmSync(outcomePath, { force: true });
+
+	const quit = (ctx: ExtensionCommandContext): void => {
+		// `hunk.app.quit` is publicToExtensions; false means the host refused it,
+		// and the user still has `q`.
+		if (!ctx.commands.execute("hunk.app.quit")) {
+			ctx.notify("notabene: the viewer refused to close — press q", "error");
+		}
+	};
+
+	hunk.registerCommand({ id: "completeReview", title: "Complete review (send comments)", key: "C" }, (ctx) => {
+		flush();
+		quit(ctx);
+	});
+
+	// `x`, not a neighbour of `q`: the key that throws the review away should not
+	// sit next to the one that delivers it.
+	hunk.registerCommand(
+		{ id: "cancelReview", title: "Cancel review (discard comments)", key: ["x", "X"] },
+		async (ctx) => {
+			if (rows.size > 0) {
+				const confirmed = await ctx.dialogs.confirm({
+					title: `Discard ${rows.size} comment${rows.size === 1 ? "" : "s"} and cancel the review?`,
+					body: "Nothing reaches Claude, and the comments are gone.",
+					confirmLabel: "Cancel review",
+					cancelLabel: "Keep reviewing",
+				});
+				if (!confirmed) return;
+			}
+			try {
+				writeFileSync(outcomePath, `${JSON.stringify({ version: 1, outcome: "cancelled" }, null, 2)}\n`);
+			} catch (error) {
+				// Without the marker the CLI would deliver the comments anyway — the
+				// opposite of what was just asked — so do not quit either.
+				ctx.notify(
+					`notabene: could not record the cancellation (${String(error)}) — the review is still open`,
+					"error",
+				);
+				return;
+			}
+			quit(ctx);
+		},
+	);
 }
