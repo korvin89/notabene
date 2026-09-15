@@ -25,7 +25,8 @@ The installer puts the source in `~/.local/share/notabene` and symlinks
 `~/.local/bin/{ntb,notabene}` at it; if that bin directory is not on your `PATH`,
 it prints the line to add. It refuses rather than overwrites: a directory it did
 not create, or a foreign `ntb` already in the bin directory, stops it with a
-message. Override with `NOTABENE_ROOT`, `NOTABENE_BINDIR`, `NOTABENE_REF`.
+message. `sh install.sh --help` lists the flags that change any of this:
+`--root`, `--bindir`, `--repo`, `--ref`.
 
 Prefer to read before running? `curl -fsSL <url>/install.sh -o install.sh`, read
 it, then `sh install.sh`.
@@ -45,6 +46,17 @@ that one with git yourself.
 
 Run `update` in a normal terminal, not as `!ntb update`: a `!`-command is cut
 loose after ~2 minutes, and the dependency download can outlast that.
+
+Versions are SemVer and still below 1.0, which means a minor bump may change
+behaviour you rely on; every release is a `vX.Y.Z` tag with notes on the
+[releases page](https://github.com/korvin89/notabene/releases) and in
+`CHANGELOG.md`. There are no pre-releases, and a published tag is never moved —
+if a release turns out broken, the fix is the next one. To pin a version:
+
+```sh
+sh install.sh --ref v0.2.0                      # from a downloaded script
+curl -fsSL <url>/install.sh | sh -s -- --ref v0.2.0   # or straight through the pipe
+```
 
 ### In the repositories you review
 

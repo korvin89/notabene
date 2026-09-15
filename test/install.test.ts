@@ -108,8 +108,8 @@ function run(command: string, args: string[], env: NodeJS.ProcessEnv): Run {
 	return { stdout: result.stdout ?? "", stderr: result.stderr ?? "", code: result.status ?? 1 };
 }
 
-function runInstaller(install: Install, remote: string): Run {
-	return run("sh", [INSTALL_SH], { ...install.env, NOTABENE_REPO: remote });
+function runInstaller(install: Install, remote: string, args: string[] = []): Run {
+	return run("sh", [INSTALL_SH, ...args], { ...install.env, NOTABENE_REPO: remote });
 }
 
 /** The installed CLI, run exactly as a user would: through the symlink on PATH. */
@@ -140,6 +140,27 @@ describe("install.sh", () => {
 		assert.equal(ntb(install, ["--version"]).stdout.trim(), "ntb 0.2.0");
 	});
 
+	test("--ref pins an older release instead of the newest", () => {
+		const remote = makeRemote("remote-pinned", { tag: "v0.1.0" });
+		release(remote, "0.2.0", "v0.2.0");
+		const install = installPaths("install-pinned");
+
+		assert.equal(runInstaller(install, remote, ["--ref", "v0.1.0"]).code, 0);
+
+		assert.equal(ntb(install, ["--version"]).stdout.trim(), "ntb 0.1.0");
+	});
+
+	test("an unknown flag stops the installer before it touches anything", () => {
+		const remote = makeRemote("remote-badflag", { tag: "v0.1.0" });
+		const install = installPaths("install-badflag");
+
+		const result = runInstaller(install, remote, ["--branch", "main"]);
+
+		assert.notEqual(result.code, 0);
+		assert.match(result.stderr, /unknown option: --branch/);
+		assert.ok(!existsSync(install.root), "nothing may be installed on a usage error");
+	});
+
 	test("an unreleased remote installs the default branch", () => {
 		const remote = makeRemote("remote-untagged");
 		const install = installPaths("install-untagged");
@@ -150,6 +171,20 @@ describe("install.sh", () => {
 		assert.match(result.stderr, /no tags yet/);
 		assert.equal(git(install.root, ["rev-parse", "--abbrev-ref", "HEAD"]).trim(), "main");
 		assert.equal(ntb(install, ["--version"]).code, 0);
+	});
+
+	// Version sort ranks anything lexically above `v` — `wip-hunk-spike` included —
+	// higher than every version tag, so without the glob a stray tag is what users
+	// would get (ARCHITECTURE.md §7).
+	test("a tag that is not a release is never an install target", () => {
+		const remote = makeRemote("remote-stray", { tag: "v0.1.0" });
+		release(remote, "0.2.0", "v0.2.0");
+		release(remote, "9.9.9", "wip-hunk-spike");
+		const install = installPaths("install-stray");
+
+		assert.equal(runInstaller(install, remote).code, 0);
+
+		assert.equal(ntb(install, ["--version"]).stdout.trim(), "ntb 0.2.0");
 	});
 
 	test("re-running the installer updates in place instead of failing", () => {
@@ -219,6 +254,17 @@ describe("ntb update", () => {
 		const checked = ntb(install, ["update", "--check"]);
 		assert.match(checked.stderr, /a newer release is available: v0\.5\.0/);
 		assert.equal(ntb(install, ["--version"]).stdout.trim(), "ntb 0.1.0", "--check must not install anything");
+	});
+
+	test("a stray tag on the remote is not a newer release", () => {
+		const remote = makeRemote("remote-stray-update", { tag: "v0.1.0" });
+		const install = installPaths("install-stray-update");
+		runInstaller(install, remote);
+
+		release(remote, "9.9.9", "wip-hunk-spike");
+		const result = ntb(install, ["update", "--check"]);
+
+		assert.match(result.stderr, /already on the newest release \(v0\.1\.0\)/);
 	});
 
 	test("refuses to update an unmarked checkout", () => {

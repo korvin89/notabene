@@ -12,7 +12,9 @@
 # Everything lives under one directory the installer owns and marks; `ntb update`
 # later works on that same directory and refuses to touch anything else.
 #
-# Overrides: NOTABENE_REPO, NOTABENE_ROOT, NOTABENE_BINDIR, NOTABENE_REF.
+# Overrides are flags, each with an environment equivalent for the piped form:
+# --repo/NOTABENE_REPO, --root/NOTABENE_ROOT, --bindir/NOTABENE_BINDIR,
+# --ref/NOTABENE_REF.
 set -eu
 
 REPO=${NOTABENE_REPO:-https://github.com/korvin89/notabene.git}
@@ -29,6 +31,52 @@ die() {
 	printf 'install: %s\n' "$*" >&2
 	exit 1
 }
+
+usage() {
+	say "usage: install.sh [--ref <tag>] [--root <dir>] [--bindir <dir>] [--repo <url>]"
+	say ""
+	say "  --ref     install this tag or branch instead of the newest release"
+	say "  --root    where to install     (default $ROOT)"
+	say "  --bindir  where to link ntb    (default $BINDIR)"
+	say "  --repo    clone this URL instead of the canonical repository"
+	say ""
+	say "Piped, the flags go after \`-s --\`:"
+	say "    curl -fsSL <url>/install.sh | sh -s -- --ref v0.2.0"
+	say ""
+	say "Each flag also reads an environment variable: NOTABENE_REF, NOTABENE_ROOT,"
+	say "NOTABENE_BINDIR, NOTABENE_REPO."
+}
+
+# --- arguments ----------------------------------------------------------------
+
+while [ $# -gt 0 ]; do
+	case $1 in
+	-h | --help)
+		usage
+		exit 0
+		;;
+	--*=*)
+		name=${1%%=*}
+		value=${1#*=}
+		shift
+		;;
+	--*)
+		name=$1
+		[ $# -ge 2 ] || die "$1 needs a value (try --help)"
+		value=$2
+		shift 2
+		;;
+	*) die "unexpected argument: $1 (try --help)" ;;
+	esac
+
+	case $name in
+	--ref) REF=$value ;;
+	--root) ROOT=$value ;;
+	--bindir) BINDIR=$value ;;
+	--repo) REPO=$value ;;
+	*) die "unknown option: $name (try --help)" ;;
+	esac
+done
 
 # --- preflight ---------------------------------------------------------------
 
@@ -50,7 +98,7 @@ if [ -e "$ROOT" ]; then
 	# Never adopt a directory we did not create: it may be a developer's checkout
 	# with unfinished work, and `checkout` below would discard it.
 	[ -f "$ROOT/$MARKER_NAME" ] \
-		|| die "$ROOT exists but was not created by this installer — remove it, or set NOTABENE_ROOT to another path"
+		|| die "$ROOT exists but was not created by this installer — remove it, or install elsewhere with --root"
 	say "updating $ROOT"
 	git -C "$ROOT" remote set-url origin "$REPO"
 	git -C "$ROOT" fetch --quiet --tags --prune origin
@@ -61,7 +109,9 @@ else
 fi
 
 if [ -z "$REF" ]; then
-	REF=$(git -C "$ROOT" tag --list --sort=-v:refname | head -n 1)
+	# A release is a `vX.Y.Z` tag and nothing else (ARCHITECTURE.md §7): the glob
+	# keeps a stray tag in the repository from becoming what users install.
+	REF=$(git -C "$ROOT" tag --list 'v[0-9]*' --sort=-v:refname | head -n 1)
 fi
 
 if [ -n "$REF" ]; then
@@ -96,9 +146,9 @@ link() {
 	if [ -L "$target" ]; then
 		current=$(readlink "$target")
 		[ "$current" = "$ROOT/ntb" ] \
-			|| die "$target already points at $current — remove it, or set NOTABENE_BINDIR"
+			|| die "$target already points at $current — remove it, or link elsewhere with --bindir"
 	elif [ -e "$target" ]; then
-		die "$target already exists and is not our symlink — remove it, or set NOTABENE_BINDIR"
+		die "$target already exists and is not our symlink — remove it, or link elsewhere with --bindir"
 	fi
 	ln -sf "$ROOT/ntb" "$target"
 }
