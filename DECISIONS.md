@@ -375,3 +375,54 @@ first word is refused rather than guessed at, which is what keeps that door open
 **Not an agent-facing change.** The batch header (§3.1) carries no command names,
 so the stdout contract is untouched; only stderr hints and docs changed. Rewording
 the header itself would be the opposite case — a behaviour change.
+
+### D27. Releases: no pre-release tags, no retagging, release-please cuts the tag
+2026-09-15 · in effect · extends D25
+
+The release list stays "git tags" (D25), narrowed to `vX.Y.Z` and to tags created
+by release-please from the `package.json` version it just bumped. There are no
+`-rc`/`-beta` tags and a published tag is never moved or deleted. The shape of the
+scheme is in ARCHITECTURE.md §7.1; this entry records why the boundaries are where
+they are.
+
+**Why no pre-release tags.** Both the installer and `ntb update` pick a release
+with `git tag --list --sort=-v:refname | head -n 1`. Probed on git 2.50.1 in a
+throwaway repository: that order returns `v1.0.0-rc.1` *above* `v1.0.0`, so a
+single rc tag silently becomes what every user installs and updates to. The fixes
+available were `versionsort.suffix` in both call sites or no pre-releases at all;
+for an audience of Claude Code users a release candidate buys nothing worth that
+configuration. The `v[0-9]*` glob added to both call sites is a separate guard and
+does not help here — `v1.0.0-rc.1` matches it.
+
+**Why a tag is never withdrawn.** Probed the same way: after a tag is deleted on
+the remote, `git fetch --quiet --tags --prune origin` leaves it in place on the
+client — pruning tags needs `--prune-tags`, which neither `install.sh` nor
+`src/update.ts` passes. A withdrawn release would therefore survive in every
+existing install and keep being "newest" there. Retagging is not a recovery path;
+the next patch release is.
+
+**Why release-please over the alternatives.** It runs as a GitHub Action, so the
+zero-dependency invariant (§6) holds — `semantic-release` and `changesets` are npm
+packages and would put release tooling in `devDependencies`. It also makes the
+`package.json`-must-equal-the-tag rule structural rather than a CI check: the same
+run writes the version and creates the tag. `semantic-release` tags straight from
+CI with no reviewable step, which is the wrong shape when tags are immutable.
+
+**Two traps in its configuration**, both found in the upstream sources rather than
+the docs. `buildNewVersion()` resolves a first release as
+`release-as` → `Release-As:` footer → `bump()` only when a previous release exists
+→ otherwise `initialReleaseVersion()`, which returns `initial-version` or a
+hardcoded `1.0.0`; `bump-minor-pre-major` is never reached. Hence
+`initial-version: 0.2.0` in `release-please-config.json` and `0.0.0` in the
+manifest (that value is explicitly excluded from counting as a release) — remove
+either and the first release of a fresh clone is 1.0.0. And the `release-as`
+*config key* is deprecated precisely because it is sticky: it pins every future
+release to the same version, and the duplicate-tag conflict that follows is
+downgraded to a warning, so it fails silently.
+
+**Consequences.** Resources created with `GITHUB_TOKEN` do not trigger other
+workflows, so `ci.yml` does not run on the release pull request. That is only
+acceptable while `main` has no required checks (it has none today, and none are
+configured as rulesets): the release pull request touches version and changelog
+files only, and CI runs on `main` immediately after the merge. Protecting `main`
+means giving the release job a PAT or a GitHub App token in the same change.

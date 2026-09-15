@@ -51,11 +51,17 @@ function installedVersion(): string {
 }
 
 /**
- * Newest tag by version order. Empty string when the repository has no tags —
- * an unreleased remote is a normal state, not a failure.
+ * Newest release tag by version order. Empty string when the repository has no
+ * releases — an unreleased remote is a normal state, not a failure.
+ *
+ * Two things keep "newest" well defined. The `v[0-9]*` glob: a tag that is not
+ * `vX.Y.Z` is not a release, and version sort happily ranks `wip-spike` above
+ * every version tag. And the rule that there are no pre-release tags at all
+ * (ARCHITECTURE.md §7) — the glob would not catch those, and git's version sort
+ * puts `v1.0.0-rc.1` *above* `v1.0.0`, so an rc would become everyone's update.
  */
 async function latestTag(): Promise<string> {
-	const tags = await git(["tag", "--list", "--sort=-v:refname"]);
+	const tags = await git(["tag", "--list", "v[0-9]*", "--sort=-v:refname"]);
 	return tags.split("\n")[0]?.trim() ?? "";
 }
 

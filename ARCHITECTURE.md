@@ -338,10 +338,15 @@ src/update.ts   ntb update: the same steps on an already marked directory
 
 | Piece | Value |
 |---|---|
-| install root | `${XDG_DATA_HOME:-~/.local/share}/notabene` (`NOTABENE_ROOT`) |
-| symlinks | `~/.local/bin/{ntb,notabene}` → `<root>/ntb` (`NOTABENE_BINDIR`) |
-| release | a git tag; `--version` reads `package.json` |
+| install root | `${XDG_DATA_HOME:-~/.local/share}/notabene` (`--root`) |
+| symlinks | `~/.local/bin/{ntb,notabene}` → `<root>/ntb` (`--bindir`) |
+| release | a `vX.Y.Z` git tag; `--version` reads `package.json` (§7.1) |
 | marker | `<root>/.managed-install` |
+
+`install.sh --help` lists the four flags — `--ref`, `--root`, `--bindir`,
+`--repo`. Each also reads an environment variable of the same name
+(`NOTABENE_REF` and so on): a piped `curl | sh` can take flags only through
+`sh -s --`, and the test suite sets the environment rather than the arguments.
 
 Two properties are load-bearing:
 
@@ -360,6 +365,36 @@ Re-running the installer is the same code path as `update`, so "install" and
 A Claude Code plugin is the natural second channel when one is wanted: a plugin's
 `bin/` lands on the Bash tool's `PATH`, and this repository plus a manifest is all
 it takes.
+
+### 7.1. Versioning and releases
+
+SemVer, below 1.0 for now. The public surface is everything that changes how the
+tool is used: commands and flags (§1), exit codes (§3.4), the stdout batch (§3.1),
+the machine-readable copy (§3.2), install paths and `NOTABENE_*` variables, the
+`engines.node` floor, and the pinned viewer — a new pin costs every user a ~100 MB
+download, so it is never a silent patch. The `version` fields inside the on-disk
+artefacts (§3.2, §3.3) are a separate axis and do not move with the product.
+
+| Rule | |
+|---|---|
+| numbering | `feat` → minor, `fix`/`perf` → patch, breaking → minor while < 1.0 |
+| tag | `vX.Y.Z`, the only shape that counts as a release |
+| pre-releases | none — version sort ranks `v1.0.0-rc.1` *above* `v1.0.0` |
+| tags | immutable; a bad release is fixed by the next patch, never by retagging |
+| source of truth | `package.json`; the tag is cut from it, so the two cannot drift |
+
+The mechanism is release-please (`.github/workflows/release-please.yml`): it keeps
+a pull request open that bumps `package.json`, `package-lock.json` and
+`CHANGELOG.md` from the conventional commits since the last release, and on merge
+creates the tag and the GitHub release. `CHANGELOG.md` is generated — DECISIONS.md
+stays the place for *why*, the changelog only records *what changed*.
+
+Two consequences worth naming. Retagging would not work even if the policy allowed
+it: `git fetch --tags --prune` does not delete a tag that vanished from the remote
+(that needs `--prune-tags`, which neither the installer nor `update` passes), so a
+withdrawn release would live on in every existing install. And "newest" is only
+well defined because of the two rules above — the installer and `ntb update` both
+take the first of `git tag --list 'v[0-9]*' --sort=-v:refname`.
 
 ## 8. Limitations
 

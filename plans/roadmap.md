@@ -48,8 +48,10 @@ rich TUI with no external viewer dependency, package-manager distribution
    - **Update awareness.** A passive "newer version available" hint on ordinary
      runs is deferred: it needs a live probe of how an extra stderr line behaves
      under `!`. `ntb update --check` is the explicit form today.
-   - **Release process.** Tags exist as the mechanism; a changelog and a
-     published remote are still to come.
+   - ~~**Release process.**~~ Closed, 2026-09-15: SemVer below 1.0, `vX.Y.Z`
+     tags cut by release-please from `package.json`, and a generated
+     `CHANGELOG.md` (ARCHITECTURE.md §7.1, DECISIONS.md D27). The remote is
+     published; `v0.2.0` is the first release.
    - **A second channel** — a Claude Code plugin — stays cheap on top of this
      repository (D25 has the measurements); Linux support (item 11) is its
      natural companion.
