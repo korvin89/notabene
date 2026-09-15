@@ -154,6 +154,11 @@ An internal CLI ↔ extension contract, both files in `<repo>/.claude/reviews/`:
   by the extension: one write per note event, via a temp file and `rename`. The
   name is unique per review so that a viewer left open doesn't clobber the next
   review's mirror; readers take the path from the handoff.
+- **`notes-<createdAt>.outcome.json`** appears only when the user cancels the
+  review (`x` in the viewer): `{"version": 1, "outcome": "cancelled"}`. Its
+  absence is the normal case — quitting the viewer any other way delivers the
+  comments (D28). The name is derived from the mirror's so that one cleanup
+  pattern covers both.
 - `pending.json` links `open` and `collect`: without it, the collection
   step knows neither the turn nor the prompt snippet.
 
@@ -163,9 +168,10 @@ structurally. The synchrony is guarded by `test/hunk-ext.test.ts` (verified by
 mutation: renaming any contract field that is read breaks the test;
 `previousPath` isn't read by the extension, so the test doesn't cover it).
 
-When the review session closes (batch delivered or there were no comments),
-`pending`, the handoff and the mirrors are removed; the machine-readable copies
-remain. Exception: if the viewer failed to open, only `pending` is removed —
+When the review session closes (batch delivered, no comments, or the review was
+cancelled), `pending`, the handoff and the mirrors are removed; the
+machine-readable copies remain — a cancelled review leaves none, since nothing
+was reviewed. Exception: if the viewer failed to open, only `pending` is removed —
 a handoff without it is read by nobody and is kept for inspection.
 
 ### 3.4. Exit codes

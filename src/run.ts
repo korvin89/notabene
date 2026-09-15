@@ -12,7 +12,7 @@ import { TurnsSchemaError } from "./diff/jsonl.ts";
 import { TurnsUnavailableError, buildTurnChangesets } from "./diff/turns.ts";
 import { stdoutDelivery } from "./delivery/index.ts";
 import { resolveHunkBinary } from "./hunk/bin.ts";
-import { clearHandoff, handoffPath, readHandoff, writeHandoff } from "./hunk/handoff.ts";
+import { clearHandoff, handoffPath, readHandoff, reviewCancelled, writeHandoff } from "./hunk/handoff.ts";
 import { collectComments } from "./hunk/notes.ts";
 import { EXIT, ReviewError, emit, log } from "./io.ts";
 import type { ExitCode } from "./io.ts";
@@ -180,7 +180,8 @@ async function ensureNoPending(store: CommentStore): Promise<void> {
 
 /**
  * An empty review is a normal outcome: stdout stays empty and Claude does
- * nothing (a spec requirement, ARCHITECTURE.md §3.1).
+ * nothing (a spec requirement, ARCHITECTURE.md §3.1). So is a cancelled one —
+ * the user pressed `x` in the viewer and the comments are deliberately dropped.
  */
 async function finish(
 	store: CommentStore,
@@ -189,6 +190,16 @@ async function finish(
 	comments: ReviewComment[],
 	includeContext: boolean,
 ): Promise<ExitCode> {
+	if (reviewCancelled(root)) {
+		const dropped = comments.length === 0
+			? ""
+			: ` — ${comments.length} comment${comments.length === 1 ? "" : "s"} discarded`;
+		log.info(`Review cancelled in the viewer${dropped}; stdout is empty.`);
+		await store.clearPending();
+		clearHandoff(root);
+		return EXIT.ok;
+	}
+
 	if (comments.length === 0) {
 		log.info("No comments — stdout is empty.");
 		await store.clearPending();

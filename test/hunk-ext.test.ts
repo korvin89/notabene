@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import type { HunkExtensionAPI } from "hunkdiff/extension";
 import claudeDiffExtension from "../src/hunk-ext/index.ts";
-import { HANDOFF_ENV, handoffPath, mirrorPath, notesPath, readHandoff, writeHandoff } from "../src/hunk/handoff.ts";
+import { HANDOFF_ENV, handoffPath, mirrorPath, notesPath, readHandoff, reviewCancelled, writeHandoff } from "../src/hunk/handoff.ts";
 import { notesToComments, readMirrorNotes } from "../src/hunk/notes.ts";
 import type { Changeset } from "../src/model/diff.ts";
 
@@ -172,14 +172,15 @@ describe("hunk extension against the handoff contract", () => {
 		const load = fake.adapter.operations?.["working-tree-diff"]?.load;
 		assert.ok(load !== undefined);
 
-		// without range — activeId from the handoff
+		// without range — activeId from the handoff. The title carries the key
+		// hint: hunk paints it in the menu bar, the one place always on screen.
 		const active = await load({ kind: "vcs", staged: false, options: {} }, {});
-		assert.equal(active["title"], "Turn T2 (\"fix the balance\")");
+		assert.equal(active["title"], "Turn T2 (\"fix the balance\")  [C] complete  [x] cancel");
 		assert.equal(active["sourceLabel"], "notabene: T2");
 
 		// an explicit range switches
 		const current = await load({ kind: "vcs", range: "current", staged: false, options: {} }, {});
-		assert.equal(current["title"], "Current state");
+		assert.equal(current["title"], "Current state  [C] complete  [x] cancel");
 		assert.match(String(current["patchText"]), /^diff --git a\/a\.txt b\/a\.txt\n/);
 
 		// readFileSource: both sides and a missing file
@@ -341,5 +342,62 @@ describe("hunk extension against the handoff contract", () => {
 		assert.equal(fake.commands.get("prevTurn")?.key, "<");
 		assert.equal(fake.commands.get("nextTurn")?.key, ">");
 		assert.equal(fake.commands.get("pickTurn")?.key, "T");
+	});
+
+	test("finishing: C completes, x cancels after a confirmation, a stale marker does not carry over", async () => {
+		const fake = fakeHunk();
+		claudeDiffExtension(fake.api);
+
+		// Free of hunk's built-ins: `q` is app.quit and `c` starts a note, so a
+		// chord of theirs would be dropped from our command with a warning.
+		assert.equal(fake.commands.get("completeReview")?.key, "C");
+		assert.deepEqual(fake.commands.get("cancelReview")?.key, ["x", "X"]);
+
+		const executed: string[] = [];
+		let confirmations = 0;
+		const ctx = (answer: boolean): unknown => ({
+			notify: (): void => {},
+			commands: {
+				execute: (id: string): boolean => {
+					executed.push(id);
+					return true;
+				},
+			},
+			dialogs: {
+				confirm: async (): Promise<boolean> => {
+					confirmations += 1;
+					return answer;
+				},
+			},
+		});
+
+		// complete: quits and writes no marker — delivery is the default outcome
+		await fake.commands.get("completeReview")?.handler(ctx(true));
+		assert.deepEqual(executed, ["hunk.app.quit"]);
+		assert.equal(reviewCancelled(cwd), false);
+
+		// an empty review is cancelled without asking
+		await fake.commands.get("cancelReview")?.handler(ctx(true));
+		assert.equal(confirmations, 0, "nothing to discard — no dialog");
+		assert.equal(reviewCancelled(cwd), true);
+
+		// with comments the dialog decides: declining leaves the review alone
+		const reopened = fakeHunk();
+		claudeDiffExtension(reopened.api);
+		assert.equal(reviewCancelled(cwd), false, "a marker of a previous opening must not decide this review");
+		await reopened.emit("note_created", {
+			note: { id: "user:1-1", filePath: "a.txt", side: "new", newRange: [1, 1], body: "keep me", draft: false },
+		});
+		executed.length = 0;
+		await reopened.commands.get("cancelReview")?.handler(ctx(false));
+		assert.equal(confirmations, 1);
+		assert.deepEqual(executed, [], "a declined cancel must not close the viewer");
+		assert.equal(reviewCancelled(cwd), false);
+
+		// confirming it records the cancellation and quits
+		await reopened.commands.get("cancelReview")?.handler(ctx(true));
+		assert.equal(confirmations, 2);
+		assert.deepEqual(executed, ["hunk.app.quit"]);
+		assert.equal(reviewCancelled(cwd), true);
 	});
 });
