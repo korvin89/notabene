@@ -1,0 +1,66 @@
+# The pre-commit gate from AGENTS.md, run for every pull request: `npm run
+# typecheck` and `npm test`. There is no build step, so `npm ci` plus the two
+# commands is the whole pipeline.
+#
+# Both platforms, although the product ships for macOS only (README, install.sh):
+# the suite itself is platform-neutral — it stubs the viewer instead of running
+# it, and takes the process tree and git through plain POSIX tools — and it was
+# verified green on Linux before this matrix was written. Linux is the cheap,
+# fast lane that catches most regressions; macOS is the platform users actually
+# install on, and only it exercises the arm64 viewer binary and the macOS tmpdir
+# symlink. Neither is redundant.
+#
+# Node matrix: 22.18.0 is the floor from `engines` — the first release that runs
+# TypeScript without a flag — and 24 is the current LTS. Both are checked,
+# because the product is executed by whatever node the user already has.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A new push to a pull request supersedes the previous run; main is never
+# cancelled, so every commit there keeps its own result.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # tsc is platform-independent and needs no viewer binary, so this one runs
+  # where it is cheapest — it is the first check to report on a pull request.
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+      # `npm ci` also guards the lockfile: it fails if package.json drifted from
+      # it, which matters because install.sh installs from the lockfile.
+      - run: npm ci
+      - run: npm run typecheck
+
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: ["22.18.0", "24"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      # The suite never launches the real viewer (it is stubbed via
+      # NOTABENE_HUNK) and never touches a real ~/.claude, so a runner needs no
+      # setup beyond node — see AGENTS.md, "Pitfalls of this repository".
+      - run: npm test
