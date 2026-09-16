@@ -1,6 +1,6 @@
 # notabene
 
-Terminal diff review for Claude Code: `!ntb` right from the session opens the
+Terminal diff review for Claude Code: `/ntb` right from the session opens the
 current turn's changes (or any previous turn's — labeled with snippets of your
 prompts) in the [hunk](https://hunk.dev) viewer, you leave inline comments, and
 the batch travels back into the agent's context — it responds point by point and
@@ -30,6 +30,26 @@ message. `sh install.sh --help` lists the flags that change any of this:
 
 Prefer to read before running? `curl -fsSL <url>/install.sh -o install.sh`, read
 it, then `sh install.sh`.
+
+### The plugin
+
+The installer brings the CLI; `/ntb` comes from the Claude Code plugin, which is
+a separate step:
+
+```
+/plugin marketplace add korvin89/notabene
+/plugin install ntb@notabene
+```
+
+Two installs for one tool is a wart we have not yet collapsed. You can skip the
+plugin and drive everything with `!ntb` — but then a review that outlasts the
+wait needs you to write to the agent yourself, because a `!`-command cannot wake
+it (see "Two ways in" below).
+
+The first `/ntb` asks permission to run `ntb`; approve it once. In Claude Code's
+automatic permission mode the request may be refused outright by the classifier
+rather than shown to you — allow `Bash(ntb:*)` in your `settings.json` if that
+happens.
 
 ### Updating
 
@@ -87,13 +107,22 @@ escape sequences in the terminal don't get it. Until the lines are there,
 
 ## Usage
 
-### Single command (Claude Code in kitty or in a Herdr pane)
+### Two ways in
 
-In a Claude Code session:
+In a Claude Code session, either `/ntb` — the agent runs the review itself and
+waits for you — or `!ntb`, where you run it and the output reaches the agent as
+part of your next message. Same viewer, same batch; they differ only in what
+happens when the review runs long, which it usually does. Past the caller's
+timeout Claude Code detaches the command without killing it, and then:
 
-```
-!ntb
-```
+- after `/ntb` the command belongs to the agent. Quitting the viewer wakes it
+  through the task-completion notification and the batch is delivered with
+  **nothing asked of you** (verified live, DECISIONS.md D29);
+- after `!ntb` the command belongs to you, and there is no agent turn to return
+  to. The batch waits until you write to the agent — telling it you are done is
+  enough.
+
+That difference is why the plugin exists. Everything below applies to both.
 
 The rest depends on the environment: in kitty a tab with the diff opens, in
 Herdr — an adjacent pane. The pane deliberately stays open after the review: the
@@ -167,7 +196,7 @@ Flags belong to the command that uses them; anywhere else they are a usage error
 ```
 review, open:          --turn N        the turn T<N> diff, not the current state
                        --launcher NAME herdr | kitty | manual — bypass detection
-                       --timeout MIN   viewer wait time (default 30)
+                       --timeout MIN   viewer wait time (default 240)
 review, open, collect: --context       add context lines to batch items
 update:                --check         report only, change nothing
 everywhere:            --verbose       diagnostics to stderr
@@ -177,21 +206,23 @@ everywhere:            --verbose       diagnostics to stderr
 
 ## MVP limitations
 
-- **A review longer than ~2 minutes becomes asynchronous.** Claude Code waits
-  120 s for a `!`-command, then moves it to the background ("moved to the
-  background") — that's fine: the viewer stays open, and after quitting a
-  background-task-completed notification arrives, from whose file Claude reads
-  the batch on its own (verified live). If Claude didn't read the file — just
-  ask: the batch and the path to the JSON copy are in the task file (re-running
-  `!ntb collect` won't help, pending is already cleared). Strict synchrony
-  can be had by raising `BASH_DEFAULT_TIMEOUT_MS` in the `env` of your
-  `settings.json`, but that affects all `!`-commands and the Bash tool.
+- **A long review becomes asynchronous.** The detach ceiling is the caller's, not
+  ours: 120 s for `!ntb`, ten minutes for `/ntb` (the Bash tool's maximum). Past
+  it the command is moved to the background but not killed — the viewer stays
+  open and the batch ends up in the task file. After `/ntb` the agent is woken by
+  the completion notification and reads it; after `!ntb` nothing wakes it, so
+  tell it you are done. If it still hasn't read the file, just ask: the batch and
+  the path to the JSON copy are both in there (re-running `ntb collect` won't
+  help, pending is already cleared). For `!ntb`, strict synchrony can be bought by
+  raising `BASH_DEFAULT_TIMEOUT_MS` in the `env` of your `settings.json`, but that
+  affects every `!`-command and the agent's Bash tool.
 - **Comments left after switching turns** (`<`/`>`/`T`) end up in the batch
   under the original turn's header — the `file:line` anchor stays true to its
   own turn, but the batch header doesn't change.
 - **One review per repository at a time.** Review-session files are shared; a
-  second `!ntb` on top of an unfinished one gets a refusal with a hint —
-  `!ntb collect` first.
+  second run on top of an unfinished one gets a refusal with a hint — `ntb
+  collect` first. The viewer wait is 4 hours by default, so a viewer opened and
+  forgotten keeps refusing for that long; `collect` ends it at any point.
 - **Everything is computed from the git repository root**, not the session
   directory: `.claude/reviews/` lives there, batch paths (`@pkg/deep/file.ts`)
   come from there — exactly as git itself prints them. If Claude Code runs in a

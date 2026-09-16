@@ -29,12 +29,21 @@ export const LAUNCHER_CHAIN: readonly LauncherName[] = ["herdr", "kitty", "manua
 export const BANG_DETACH_MS = 120 * 1000;
 
 /**
- * 30 minutes (ARCHITECTURE.md §5.5) — protection against a viewer left open and
+ * 4 hours (ARCHITECTURE.md §5.5) — protection against a viewer left open and
  * forgotten. Deliberately larger than BANG_DETACH_MS: cutting a review short at
  * minute two is worse than living through the detach, and the detach itself
  * does not hinder the review.
+ *
+ * Was 30 minutes until 2026-09-16, when a live run expired mid-review: expiry
+ * exits with empty stdout, which drops delivery back to a manual `ntb collect`
+ * and therefore back to needing a human message — the exact failure the agent-run
+ * flow exists to remove. The old value was calibrated for `!ntb`, where the
+ * process held the user's command hostage; run from the Bash tool it holds
+ * nothing, the agent is asleep, and waiting is free. The remaining cost of a long
+ * wait is that a forgotten viewer keeps `ensureNoPending` refusing new reviews
+ * until someone runs `collect`.
  */
-export const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
+export const DEFAULT_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 
 export { herdrLauncher } from "./herdr.ts";
 export { kittyLauncher } from "./kitty.ts";

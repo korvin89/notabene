@@ -41,7 +41,7 @@ export interface OpenOptions {
 }
 
 export interface WaitOptions {
-	/** 30 minutes by default (ARCHITECTURE.md §5.5); adjusted to the `!` ceiling */
+	/** 4 hours by default (ARCHITECTURE.md §5.5); overridden by `--timeout` */
 	timeoutMs: number;
 	signal?: AbortSignal;
 }

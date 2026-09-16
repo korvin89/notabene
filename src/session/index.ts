@@ -94,6 +94,6 @@ export function resolveSession(ctx: SessionContext = defaultSessionContext()): S
 	throw new ReviewError(
 		"could not determine the Claude Code session: CLAUDE_CODE_SESSION_ID is not set and "
 			+ `no process ancestor is a claude with an entry in ${join(ctx.claudeDir, "sessions")}. `
-			+ "Run it from inside a session — `!ntb`.",
+			+ "Run it from inside a session — `/ntb`.",
 	);
 }
