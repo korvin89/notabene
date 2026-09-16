@@ -1,5 +1,6 @@
 {
   "name": "notabene",
+  "description": "notabene — terminal diff review for Claude Code",
   "owner": {
     "name": "Evgenii Alaev"
   },
