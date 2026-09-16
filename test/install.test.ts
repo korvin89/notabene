@@ -57,6 +57,9 @@ function makeRemote(name: string, options: { tag?: string } = {}): string {
 		cpSync(join(REPO_ROOT, entry), join(remote, entry));
 	}
 	cpSync(join(REPO_ROOT, "src"), join(remote, "src"), { recursive: true });
+	// The plugin rides along because `ntb update` diffs `.claude-plugin/skills`
+	// between tags to decide whether the plugin hint is worth printing.
+	cpSync(join(REPO_ROOT, ".claude-plugin"), join(remote, ".claude-plugin"), { recursive: true });
 	chmodSync(join(remote, "ntb"), 0o755);
 	setVersion(remote, FIXTURE_VERSION);
 	git(remote, ["add", "-A"]);
@@ -65,12 +68,28 @@ function makeRemote(name: string, options: { tag?: string } = {}): string {
 	return remote;
 }
 
-/** Publishes a new version on the remote: bumps package.json and tags it. */
-function release(remote: string, version: string, tag: string): void {
+/**
+ * Publishes a new version on the remote: bumps package.json and tags it.
+ * `skill` edits the agent-facing instruction in the same release — the only
+ * change that makes `ntb update` mention the plugin at all.
+ */
+function release(remote: string, version: string, tag: string, options: { skill?: boolean } = {}): void {
 	setVersion(remote, version);
+	if (options.skill === true) {
+		const path = join(remote, ".claude-plugin", "skills", "ntb", "SKILL.md");
+		writeFileSync(path, `${readFileSync(path, "utf8")}\nA line the agent now reads.\n`);
+	}
 	git(remote, ["add", "-A"]);
 	git(remote, ["commit", "--quiet", "-m", version]);
 	git(remote, ["tag", tag]);
+}
+
+/** What Claude Code records about an installed plugin (src/plugin.ts). */
+function recordPlugin(install: Install, version: string | null): void {
+	const dir = join(install.home, ".claude", "plugins");
+	mkdirSync(dir, { recursive: true });
+	const plugins = version === null ? {} : { "ntb@notabene": [{ scope: "user", version }] };
+	writeFileSync(join(dir, "installed_plugins.json"), JSON.stringify({ version: 2, plugins }, null, 2));
 }
 
 /** A PATH whose `npm` does nothing: the dependency download is not under test. */
@@ -267,6 +286,66 @@ describe("ntb update", () => {
 		const checked = ntb(install, ["update", "--check"]);
 		assert.match(checked.stderr, /a newer release is available: v0\.5\.0/);
 		assert.equal(ntb(install, ["--version"]).stdout.trim(), "ntb 0.1.0", "--check must not install anything");
+	});
+
+	// The plugin is the other half of the install (§7.2) and updates by its own
+	// path. `ntb update` is where the drift is visible, so it reports it — but
+	// only when it is real, because a hint that fires every release is ignored.
+	test("no plugin installed: the update says so and prints the two lines", () => {
+		const remote = makeRemote("remote-noplugin", { tag: "v0.1.0" });
+		const install = installPaths("install-noplugin");
+		runInstaller(install, remote);
+		release(remote, "0.2.0", "v0.2.0");
+
+		const result = ntb(install, ["update"]);
+
+		assert.equal(result.stdout, "", "the hint is diagnostics, not a batch");
+		assert.match(result.stderr, /plugin is not installed/);
+		assert.match(result.stderr, /\/plugin marketplace add korvin89\/notabene/);
+		assert.match(result.stderr, /\/plugin install ntb@notabene/);
+	});
+
+	test("plugin behind and the skill changed: the update says how to catch it up", () => {
+		const remote = makeRemote("remote-plugin-stale", { tag: "v0.1.0" });
+		const install = installPaths("install-plugin-stale");
+		runInstaller(install, remote);
+		recordPlugin(install, "0.1.0");
+		release(remote, "0.2.0", "v0.2.0", { skill: true });
+
+		const result = ntb(install, ["update"]);
+
+		assert.match(result.stderr, /plugin is at 0\.1\.0 and still ships that skill, while this CLI is 0\.2\.0/);
+		assert.match(result.stderr, /\/plugin update ntb@notabene/);
+		// the step people miss, and the CLI's own help is where we learned it
+		assert.match(result.stderr, /restart Claude Code/);
+	});
+
+	test("plugin behind but the skill untouched: not a word about it", () => {
+		const remote = makeRemote("remote-plugin-quiet", { tag: "v0.1.0" });
+		const install = installPaths("install-plugin-quiet");
+		runInstaller(install, remote);
+		recordPlugin(install, "0.1.0");
+		// a plain release: release-please would still bump the plugin manifest, so
+		// the version gap is real — the skill is not, and that is what decides
+		release(remote, "0.2.0", "v0.2.0");
+
+		const result = ntb(install, ["update"]);
+
+		assert.equal(result.code, 0);
+		assert.match(result.stderr, /updated to v0\.2\.0/);
+		assert.doesNotMatch(result.stderr, /\/plugin/, "a version gap alone is not worth a hint");
+	});
+
+	test("plugin level with the CLI: silence", () => {
+		const remote = makeRemote("remote-plugin-level", { tag: "v0.1.0" });
+		const install = installPaths("install-plugin-level");
+		runInstaller(install, remote);
+		recordPlugin(install, "0.2.0");
+		release(remote, "0.2.0", "v0.2.0", { skill: true });
+
+		const result = ntb(install, ["update"]);
+
+		assert.doesNotMatch(result.stderr, /\/plugin/);
 	});
 
 	test("a stray tag on the remote is not a newer release", () => {

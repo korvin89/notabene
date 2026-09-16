@@ -660,3 +660,40 @@ able to name what it is delivering, so an unknown scope degrades to "the diff".
 turn T3 diff (…)" becomes "Review of the working tree diff" / "the diff since
 main" / "the staged diff" / "the A..B diff". Snapshot fixtures moved in the same
 commit.
+
+### D32. `ntb update` reports the plugin, it does not update it
+2026-09-16 · in effect
+
+After updating the CLI, `ntb update` reads Claude Code's own installation record
+(`<claudeDir>/plugins/installed_plugins.json`) and says one of three things: the
+plugin is absent — here are the two lines to add it; the plugin is behind and
+this release changed the skill — here are the lines to catch it up, and restart
+Claude Code afterwards; anything else — nothing.
+
+**Why not do it.** Making `ntb update` shell out to `claude plugin update` was
+the obvious ask and does not survive contact with the facts. `claude plugin
+update --help` states the result plainly: *"Update a plugin to the latest version
+(restart required to apply)"*. So even a successful call ends with the same
+instruction we would otherwise print, and the session in front of the user is
+still running the old skill — there is no version of this that ends with the job
+done. On top of that it would put our update path at the mercy of another tool's
+CLI surface, which we do not control, and `ntb update` runs in a plain terminal
+where `claude` need not be on `PATH` at all. The update path is git and nothing
+else (D25); this is the same rule.
+
+**Why the hint is gated on the skill, not on the version.** release-please bumps
+the plugin manifests on every release (§7.1, `extra-files`), so the installed
+plugin is *numerically* behind after every single release, while the skill — the
+only thing the plugin ships that the agent reads — changes rarely. A hint keyed
+on the version gap would fire every time and be learned as noise within two
+releases. So the gate is `git diff --name-only v<plugin> v<cli> --
+.claude-plugin/skills`: the manifests' own churn is excluded by the path, and a
+reworded marketplace description is not a reason to interrupt anyone.
+
+**Consequences.** We now read a second undocumented Claude Code state file, on
+top of the session registry (§4.1), and it gets the same rule: an unfamiliar
+shape reads as "unknown" and never as an error — an update must not fail because
+a file we do not own changed shape. The direction this does *not* help with is
+the dangerous one: a skill newer than the CLI, which makes the agent pass flags
+the CLI has never heard of. That needs a floor checked from the skill side and is
+still open (`plans/known-gaps.md`).
