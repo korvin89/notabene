@@ -36,7 +36,7 @@ Usage:
   ntb collect [--context]
                         pick up comments from the open viewer (flow C, step 2)
   ntb update [--check]  update this install to the newest release
-  ntb dump WHAT         debugging: scopes | session | env — JSON to stdout
+  ntb dump WHAT [REV…]  debugging: scopes | session | env — JSON to stdout
 
 Scope — what to review. Every scope that applies is offered in the viewer
 (\`<\` \`>\` \`T\` switch between them); an argument only says which one opens first:
@@ -85,7 +85,9 @@ const OPTIONS: Record<Command, ParseArgsConfig["options"]> = {
 	// No launcher, no timeout: collection waits for nothing (ARCHITECTURE.md §5.4).
 	collect: { ...EVERYWHERE, context: { type: "boolean" } },
 	update: { ...EVERYWHERE, check: { type: "boolean" } },
-	dump: { ...EVERYWHERE },
+	// `dump scopes` answers "what would a review show", so it takes a scope too —
+	// but none of the flags about where to show it.
+	dump: { ...EVERYWHERE, staged: { type: "boolean" } },
 	help: { ...EVERYWHERE },
 };
 
@@ -208,8 +210,8 @@ async function main(argv: string[]): Promise<ExitCode> {
 		const mode: RunMode = command === "open" ? "open" : command === "collect" ? "collect" : "auto";
 		const options: RunOptions = {
 			mode,
-			// `dump` spends its positional on the source name, so it never carries a scope.
-			scope: command === "dump" ? null : parseScope(values.staged === true, positionals),
+			// `dump` spends its first positional on the source name; the rest is a scope.
+			scope: parseScope(values.staged === true, command === "dump" ? positionals.slice(1) : positionals),
 			timeoutMs: parseTimeout(typeof values.timeout === "string" ? values.timeout : undefined),
 			launcher: parseLauncher(typeof values.launcher === "string" ? values.launcher : undefined),
 			includeContext: values.context === true,
@@ -222,8 +224,11 @@ async function main(argv: string[]): Promise<ExitCode> {
 			if (what === undefined) {
 				throw new ReviewError("dump expects a source: scopes | session | env", EXIT.usage);
 			}
-			if (positionals.length > 1) {
-				throw new ReviewError(`dump takes one source, got: ${positionals.join(" ")}`, EXIT.usage);
+			if (what !== "scopes" && positionals.length > 1) {
+				throw new ReviewError(
+					`dump ${what} takes no further arguments, got: ${positionals.slice(1).join(" ")}`,
+					EXIT.usage,
+				);
 			}
 			return await dump(what, options);
 		}

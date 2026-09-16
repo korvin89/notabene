@@ -167,9 +167,10 @@ describe("usage errors", () => {
 		assert.equal(missing.code, 2);
 		assert.match(missing.stderr, /dump expects a source/);
 
-		const extra = await cli(["dump", "scopes", "session"]);
+		// `dump scopes` takes a scope after the source; the other sources take nothing
+		const extra = await cli(["dump", "session", "main"]);
 		assert.equal(extra.code, 2);
-		assert.match(extra.stderr, /one source/);
+		assert.match(extra.stderr, /takes no further arguments/);
 	});
 
 	test("a stray word after a command is not ignored", async () => {
