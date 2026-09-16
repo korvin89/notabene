@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0](https://github.com/korvin89/notabene/compare/v0.3.0...v0.4.0) (2026-09-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **delivery:** name the plugin skill `review`, not `ntb` ([#13](https://github.com/korvin89/notabene/issues/13))
+
+### Features
+
+* **delivery:** give the skill a version floor, maintained by release-please ([#17](https://github.com/korvin89/notabene/issues/17)) ([e500735](https://github.com/korvin89/notabene/commit/e5007359f616a150144590feae100b2d0f50a895))
+* **delivery:** name the plugin skill `review`, not `ntb` ([#13](https://github.com/korvin89/notabene/issues/13)) ([804b226](https://github.com/korvin89/notabene/commit/804b226ccf4cfd9643f26c7cb07eb56de943bc0c))
+* **update:** report the plugin half after updating the CLI ([#14](https://github.com/korvin89/notabene/issues/14)) ([aebc8ea](https://github.com/korvin89/notabene/commit/aebc8ea7e2c7aa8f5c741ad93370bfa97ec2410a))
+
 ## [0.3.0](https://github.com/korvin89/notabene/compare/v0.2.0...v0.3.0) (2026-09-16)
 
 

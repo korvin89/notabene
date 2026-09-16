@@ -10,7 +10,7 @@ allowed-tools: [Bash(ntb:*), Read, Edit, Write, Grep, Glob]
 Run the review and act on what comes back. `ntb` is on `PATH` after
 `install.sh`; if it is missing, say so instead of guessing at a path.
 
-This skill ships with notabene 0.3.0 <!-- x-release-please-version --> and
+This skill ships with notabene 0.4.0 <!-- x-release-please-version --> and
 describes that CLI. The two install and update separately, so they can drift —
 §5 is what to do when they have.
 
