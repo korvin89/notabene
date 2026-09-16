@@ -18,7 +18,7 @@ Requirements:
 
 - **Node ≥ 22.18** in `PATH` — it runs the TypeScript directly, there is no build step
 - **git** — the installer clones, and updates are git tags
-- **npm** — one `npm ci` for the pinned viewer (~100 MB, the slow part of the install)
+- **npm** — one `npm ci` for the pinned viewer, the slow part of the install
 - **macOS** — the paths to kitty and to the viewer binary assume the macOS layout
 
 The installer puts the source in `~/.local/share/notabene` and symlinks
