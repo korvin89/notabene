@@ -133,7 +133,10 @@ describe("hunk extension against the handoff contract", () => {
 				+ `fi\n`,
 		);
 		chmodSync(hunkStub, 0o755);
+		// The state directory and the review root are different things since D30;
+		// here they coincide only because the test needs no repository.
 		process.env[HANDOFF_ENV] = writeHandoff(cwd, {
+			root: cwd,
 			changesets: fixtureChangesets(cwd),
 			activeId: "T2",
 			hunkBin: hunkStub,

@@ -8,11 +8,11 @@
 
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
 import { log } from "../io.ts";
-import { reviewsDir } from "../store/index.ts";
+import { reviewStateDir } from "../store/index.ts";
 import type { Changeset, FileChangeKind, FileDiff, Hunk, HunkLine } from "../model/diff.ts";
 import type { DiffSourceOptions } from "./index.ts";
 
@@ -69,9 +69,11 @@ export async function currentChangesets(options: DiffSourceOptions): Promise<Cha
 		"--find-renames", "--unified=3", "--src-prefix=a/", "--dst-prefix=b/",
 		base,
 	]);
-	const files = parseGitPatch(patch).filter((file) => !isOwnArtifact(root, file.path));
+	const own = ownArtifactPrefix(root, options.claudeDir);
+	const isOwn = (path: string): boolean => own !== null && path.startsWith(own);
+	const files = parseGitPatch(patch).filter((file) => !isOwn(file.path));
 	for (const path of await untrackedPaths(root)) {
-		if (isOwnArtifact(root, path)) continue;
+		if (isOwn(path)) continue;
 		const file = await untrackedFileDiff(root, path);
 		if (file !== null) files.push(file);
 	}
@@ -111,15 +113,18 @@ async function untrackedPaths(root: string): Promise<string[]> {
 }
 
 /**
- * The review's own service files (`.claude/reviews/`) are not shown in the diff,
- * even if a foreign repository did not add them to `.gitignore`. Otherwise the
- * handoff of the previous run becomes an untracked file of the next one, its text
- * travels into the `newText` of the new handoff — which then grows roughly
- * threefold per run.
+ * Our own state files are never shown in the diff. Since D30 they live outside
+ * the tree, so normally nothing matches — but `CLAUDE_CONFIG_DIR` may point
+ * INTO the repository (a project-local Claude Code config), and then the whole
+ * pre-D30 failure returns: the previous run's handoff becomes an untracked file
+ * of the next one and its text travels into the new handoff's `newText`, which
+ * grew it roughly threefold per run.
+ *
+ * null — the state directory is outside the root and there is nothing to filter.
  */
-function isOwnArtifact(root: string, path: string): boolean {
-	const prefix = `${relative(root, reviewsDir(root))}/`;
-	return path.startsWith(prefix);
+function ownArtifactPrefix(root: string, claudeDir: string): string | null {
+	const rel = relative(root, reviewStateDir(root, claudeDir));
+	return rel === "" || rel.startsWith("..") || isAbsolute(rel) ? null : `${rel}/`;
 }
 
 /** null — the file disappeared between `ls-files` and reading; skip silently. */

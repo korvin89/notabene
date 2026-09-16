@@ -4,14 +4,34 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, describe, test } from "node:test";
+import { reviewStateDir } from "../src/store/index.ts";
 import { claudeFixture } from "./helpers.ts";
 
 const NTB = fileURLToPath(new URL("../ntb", import.meta.url));
+
+// ONE fake `~/.claude` for the whole file. Since D30 the review state lives
+// under it, so `ntb open` and `ntb collect` only find each other's work when
+// they share it — a fresh fixture per invocation would silently break flow C.
+const CLAUDE = claudeFixture();
+
+/**
+ * Where a repository's review state lives: outside the repository (D30). The
+ * root is realpath'd because that is what `git rev-parse --show-toplevel`
+ * returns, and the slug is computed from it.
+ */
+function stateOf(repo: string): string {
+	return reviewStateDir(realpathSync(repo), CLAUDE.claudeDir);
+}
+
+/** What the reviewed repository holds, `.git` aside — D30 wants this untouched by us. */
+function tree(repo: string): string[] {
+	return readdirSync(repo).filter((name) => name !== ".git").sort();
+}
 
 // No `./ntb` run may ever happen in the repository root: on a live T5 run
 // such a test ate a real unfinished review (pending cleared, the batch went
@@ -52,7 +72,7 @@ function cli(
 
 /** The prepared review's comment mirror — its name is stored in the handoff. */
 function mirrorOf(repo: string): string {
-	const handoff = JSON.parse(readFileSync(join(repo, ".claude", "reviews", "handoff.json"), "utf8")) as {
+	const handoff = JSON.parse(readFileSync(join(stateOf(repo), "handoff.json"), "utf8")) as {
 		notesPath: string;
 	};
 	return handoff.notesPath;
@@ -63,7 +83,7 @@ function sessionEnv(sessionId = "test-session-id"): NodeJS.ProcessEnv {
 	return {
 		PATH: process.env["PATH"] ?? "",
 		CLAUDE_CODE_SESSION_ID: sessionId,
-		CLAUDE_CONFIG_DIR: claudeFixture().claudeDir,
+		CLAUDE_CONFIG_DIR: CLAUDE.claudeDir,
 	};
 }
 
@@ -162,7 +182,7 @@ describe("usage errors", () => {
 
 describe("session resolution on a live run", () => {
 	test("outside a Claude Code session — a clear error and empty stdout", async () => {
-		const result = await cli([], { env: { PATH: process.env["PATH"] ?? "", CLAUDE_CONFIG_DIR: claudeFixture().claudeDir } });
+		const result = await cli([], { env: { PATH: process.env["PATH"] ?? "", CLAUDE_CONFIG_DIR: CLAUDE.claudeDir } });
 		assert.equal(result.code, 1);
 		assert.equal(result.stdout, "");
 		assert.match(result.stderr, /determine the Claude Code session/);
@@ -217,8 +237,11 @@ describe("stdout stays empty while there is no batch", () => {
 			assert.match(result.stderr, /ntb open/);
 			assert.match(result.stderr, /ntb collect/);
 			// preparation is in place: pending for collect, handoff for the viewer
-			assert.ok(existsSync(join(dir, ".claude", "reviews", "pending.json")));
-			assert.ok(existsSync(join(dir, ".claude", "reviews", "handoff.json")));
+			assert.ok(existsSync(join(stateOf(dir), "pending.json")));
+			assert.ok(existsSync(join(stateOf(dir), "handoff.json")));
+			// …and none of it is in the reviewed tree (D30): the repository sees
+			// only the file the user actually created.
+			assert.deepEqual(tree(dir), ["new.txt"]);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -252,6 +275,52 @@ describe("stdout stays empty while there is no batch", () => {
 	});
 });
 
+describe("upgrading onto a pre-D30 in-tree review directory", () => {
+	// The state left `<repo>/.claude/reviews/` in D30. A viewer opened before the
+	// upgrade holds comments that `collect` would otherwise answer "nothing to
+	// collect" to — so the first run carries the whole directory over, mirror and
+	// handoff included, and the handoff is repointed at where the mirror now is.
+	test("a review prepared in the old place is still delivered after the move", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "notabene-migrate-"));
+		try {
+			execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir, stdio: "ignore" });
+			writeFileSync(join(dir, "new.txt"), "first\nsecond\n");
+			assert.equal((await cli([], { env: sessionEnv(), cwd: dir, detached: true })).code, 0);
+
+			// the review the previous version would have left behind: the whole
+			// directory in the tree, with the handoff naming the mirror in it
+			const state = stateOf(dir);
+			const legacy = join(realpathSync(dir), ".claude", "reviews");
+			const mirror = join(legacy, basename(mirrorOf(dir)));
+			mkdirSync(legacy, { recursive: true });
+			for (const name of readdirSync(state)) renameSync(join(state, name), join(legacy, name));
+			rmSync(state, { recursive: true, force: true });
+			const handoff = JSON.parse(readFileSync(join(legacy, "handoff.json"), "utf8")) as Record<string, unknown>;
+			handoff["notesPath"] = mirror;
+			handoff["outcomePath"] = mirror.replace(/\.json$/, ".outcome.json");
+			writeFileSync(join(legacy, "handoff.json"), JSON.stringify(handoff, null, 2));
+			writeFileSync(
+				mirror,
+				JSON.stringify([
+					{ id: "user:1-1", source: "user", file: "new.txt", side: "new", newRange: [2, 2], body: "written before the upgrade" },
+				]),
+			);
+
+			const collect = await cli(["collect"], { env: sessionEnv(), cwd: dir, detached: true });
+			assert.equal(collect.code, 0);
+			assert.match(collect.stdout, /written before the upgrade/);
+			assert.match(collect.stderr, /no longer live in the repository/);
+
+			// the directory is gone from the tree, and the session closed cleanly
+			assert.ok(!existsSync(join(dir, ".claude")));
+			assert.deepEqual(tree(dir), ["new.txt"]);
+			assert.deepEqual(readdirSync(state).filter((name) => !/^\d{4}-/.test(name)), []);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("flow C end to end, headless (T5 DoD: comments are available programmatically)", () => {
 	test("!ntb → ntb open (viewer stub) → !ntb collect → batch", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "notabene-cli-"));
@@ -267,7 +336,7 @@ describe("flow C end to end, headless (T5 DoD: comments are available programmat
 			// Step 2: `ntb open` in a "second terminal" — no session, the viewer
 			// is replaced with a stub that writes the mirror the way the extension
 			// would after a live review (the TUI itself never runs in tests).
-			const reviews = join(dir, ".claude", "reviews");
+			const state = stateOf(dir);
 			const viewer = join(dir, "viewer-stub.sh");
 			const notes = JSON.stringify([
 				{
@@ -287,7 +356,7 @@ describe("flow C end to end, headless (T5 DoD: comments are available programmat
 			const open = await cli(["open"], {
 				env: {
 					PATH: process.env["PATH"] ?? "",
-					CLAUDE_CONFIG_DIR: claudeFixture().claudeDir,
+					CLAUDE_CONFIG_DIR: CLAUDE.claudeDir,
 					NOTABENE_TTY: "1",
 					NOTABENE_HUNK: viewer,
 				},
@@ -306,19 +375,22 @@ describe("flow C end to end, headless (T5 DoD: comments are available programmat
 			assert.match(collect.stdout, /Review of the current state diff, 1 comment\./);
 			assert.match(collect.stdout, /@new\.txt:2 \[question\]/);
 			assert.match(collect.stdout, /why the second line\?/);
-			assert.match(collect.stdout, /Machine-readable copy: \.claude\/reviews\/.+\.json/);
+			// The copy is out of the tree, so the reference is absolute (D30).
+			assert.match(collect.stdout, new RegExp(`Machine-readable copy: ${state}/.+\\.json`));
 
 			// the session is closed: no service files remain, the review history does
 			assert.deepEqual(
-				readdirSync(reviews).filter((name) => !/^\d{4}-/.test(name)),
+				readdirSync(state).filter((name) => !/^\d{4}-/.test(name)),
 				[],
 				"handoff, pending, and mirrors (including .tmp) must be gone",
 			);
-			const saved = readdirSync(reviews).filter((name) => /^\d{4}-/.test(name));
+			const saved = readdirSync(state).filter((name) => /^\d{4}-/.test(name));
 			assert.equal(saved.length, 1);
-			const document = JSON.parse(readFileSync(join(reviews, saved[0] as string), "utf8"));
+			const document = JSON.parse(readFileSync(join(state, saved[0] as string), "utf8"));
 			assert.equal(document.comments.length, 1);
 			assert.equal(document.comments[0].type, "question");
+			// the repository itself stayed clean throughout
+			assert.deepEqual(tree(dir), ["new.txt", "viewer-stub.sh"]);
 
 			const again = await cli(["collect"], { env: sessionEnv(), cwd: dir });
 			assert.equal(again.code, 1);
@@ -351,7 +423,7 @@ describe("flow C end to end, headless (T5 DoD: comments are available programmat
 			const open = await cli(["open"], {
 				env: {
 					PATH: process.env["PATH"] ?? "",
-					CLAUDE_CONFIG_DIR: claudeFixture().claudeDir,
+					CLAUDE_CONFIG_DIR: CLAUDE.claudeDir,
 					NOTABENE_TTY: "1",
 					NOTABENE_HUNK: viewer,
 				},
@@ -367,8 +439,7 @@ describe("flow C end to end, headless (T5 DoD: comments are available programmat
 
 			// The session is closed exactly as a delivered one, minus the JSON copy:
 			// nothing was reviewed, so there is no history to keep.
-			const reviews = join(dir, ".claude", "reviews");
-			assert.deepEqual(readdirSync(reviews), [], "handoff, pending, mirror and marker must be gone");
+			assert.deepEqual(readdirSync(stateOf(dir)), [], "handoff, pending, mirror and marker must be gone");
 
 			// and there is nothing left to collect a second time
 			const again = await cli(["collect"], { env: sessionEnv(), cwd: dir });
@@ -395,7 +466,7 @@ describe("Ctrl-C in the flow C viewer", () => {
 			const result = await cli(["open"], {
 				env: {
 					PATH: process.env["PATH"] ?? "",
-					CLAUDE_CONFIG_DIR: claudeFixture().claudeDir,
+					CLAUDE_CONFIG_DIR: CLAUDE.claudeDir,
 					NOTABENE_TTY: "1",
 					NOTABENE_HUNK: viewer,
 				},
@@ -412,19 +483,19 @@ describe("Ctrl-C in the flow C viewer", () => {
 });
 
 describe("parallel reviews in one repo (T7): diagnostics instead of silent corruption", () => {
-	// handoff/notes/pending in `.claude/reviews/` are per-repository (T5 journal);
-	// a second `!ntb` used to silently overwrite them and wipe the open viewer's
-	// comment mirror. Now — a refusal with a hint about `collect`.
+	// handoff/notes/pending are per-repository (T5 journal); a second `!ntb` used
+	// to silently overwrite them and wipe the open viewer's comment mirror.
+	// Now — a refusal with a hint about `collect`.
 	test("a second !ntb over an unfinished session: code 1, mirror and pending intact", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "notabene-cli-"));
 		try {
 			execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir, stdio: "ignore" });
 			writeFileSync(join(dir, "new.txt"), "first\nsecond\n");
-			const reviews = join(dir, ".claude", "reviews");
+			const state = stateOf(dir);
 
 			const first = await cli([], { env: sessionEnv(), cwd: dir, detached: true });
 			assert.equal(first.code, 0);
-			const pendingBefore = readFileSync(join(reviews, "pending.json"), "utf8");
+			const pendingBefore = readFileSync(join(state, "pending.json"), "utf8");
 
 			// "the first review's viewer" already left a comment in the mirror
 			const note = JSON.stringify([
@@ -440,7 +511,7 @@ describe("parallel reviews in one repo (T7): diagnostics instead of silent corru
 			assert.match(second.stderr, /ntb collect/);
 			// nothing overwritten: the first review's mirror and pending are in place
 			assert.equal(readFileSync(mirror, "utf8"), note);
-			assert.equal(readFileSync(join(reviews, "pending.json"), "utf8"), pendingBefore);
+			assert.equal(readFileSync(join(state, "pending.json"), "utf8"), pendingBefore);
 
 			// the first review's comment is delivered as if nothing happened
 			const collect = await cli(["collect"], { env: sessionEnv(), cwd: dir, detached: true });
@@ -453,11 +524,12 @@ describe("parallel reviews in one repo (T7): diagnostics instead of silent corru
 });
 
 describe("the review root is the repository root, not the session cwd", () => {
-	// Claude Code started in a subdirectory used to get `.claude/reviews/` in the
-	// subdirectory and a handoff.root that did not match the patch paths (git
-	// always prints them from the root) — the batch reference did not resolve
-	// from the agent's cwd.
-	test("a session in a subdirectory: service files and paths are computed from the repo root", async () => {
+	// Claude Code started in a subdirectory used to get its own state directory
+	// and a handoff.root that did not match the patch paths (git always prints
+	// them from the root) — the batch reference did not resolve from the agent's
+	// cwd. The state has since left the tree (D30), but the key is still the
+	// repository root: otherwise two sessions in one repo would not see each other.
+	test("a session in a subdirectory: state and paths are keyed by the repo root", async () => {
 		const dir = realpathSync(mkdtempSync(join(tmpdir(), "notabene-root-")));
 		try {
 			execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir, stdio: "ignore" });
@@ -470,11 +542,13 @@ describe("the review root is the repository root, not the session cwd", () => {
 			assert.equal(result.code, 0);
 			assert.equal(result.stdout, "");
 
-			// the review directory is in the repository root, not in the subdirectory
-			assert.ok(existsSync(join(dir, ".claude", "reviews", "handoff.json")));
+			// the state is keyed by the repo root, and the tree — root and
+			// subdirectory alike — holds nothing of ours
+			assert.ok(existsSync(join(stateOf(dir), "handoff.json")));
+			assert.ok(!existsSync(join(dir, ".claude")));
 			assert.ok(!existsSync(join(deep, ".claude")));
 
-			const handoff = JSON.parse(readFileSync(join(dir, ".claude", "reviews", "handoff.json"), "utf8")) as {
+			const handoff = JSON.parse(readFileSync(join(stateOf(dir), "handoff.json"), "utf8")) as {
 				root: string;
 				changesets: { files: { path: string }[]; patchText: string }[];
 			};
@@ -513,7 +587,7 @@ describe("a failed viewer launch does not leave a session behind", () => {
 			assert.equal(failed.code, 1);
 			assert.equal(failed.stdout, "");
 			assert.match(failed.stderr, /did not open a tab/);
-			assert.ok(!existsSync(join(dir, ".claude", "reviews", "pending.json")), "pending must be cleared");
+			assert.ok(!existsSync(join(stateOf(dir), "pending.json")), "pending must be cleared");
 
 			// the next run does not trip over someone else's session
 			const next = await cli([], { env: sessionEnv(), cwd: dir, detached: true });

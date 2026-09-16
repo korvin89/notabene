@@ -1,6 +1,7 @@
 // Handoff — the contract between the CLI and our hunk extension (T5).
 //
-// The CLI builds changesets and writes them to `<repo>/.claude/reviews/handoff.json`;
+// The CLI builds changesets and writes them to `<stateDir>/handoff.json`, where
+// stateDir is the out-of-tree review directory (ARCHITECTURE.md §3.2, D30);
 // the file path travels to the viewer via the `NOTABENE_HANDOFF` env var.
 // The extension (src/hunk-ext/index.ts) reads the handoff, serves patches to
 // hunk through a VCS adapter and mirrors comments into `notesPath`. The
@@ -10,7 +11,6 @@
 
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { reviewsDir } from "../store/index.ts";
 import type { Changeset } from "../model/diff.ts";
 import { buildPatchText } from "./patch.ts";
 
@@ -53,16 +53,16 @@ export interface HunkHandoff {
 	changesets: HandoffChangeset[];
 }
 
-export function handoffPath(cwd: string): string {
-	return join(reviewsDir(cwd), "handoff.json");
+export function handoffPath(dir: string): string {
+	return join(dir, "handoff.json");
 }
 
 /**
  * Legacy name of the comment mirror (format — src/hunk/notes.ts). Kept as a
  * fallback for readers that have no handoff.
  */
-export function notesPath(cwd: string): string {
-	return join(reviewsDir(cwd), "notes.json");
+export function notesPath(dir: string): string {
+	return join(dir, "notes.json");
 }
 
 /**
@@ -91,9 +91,9 @@ function removeMirrors(dir: string): void {
  * every changeset (hundreds of kilobytes per turn, megabytes with the turn
  * switcher). The machine-readable review copies stay — they are history.
  */
-export function clearHandoff(cwd: string): void {
-	rmSync(handoffPath(cwd), { force: true });
-	removeMirrors(reviewsDir(cwd));
+export function clearHandoff(dir: string): void {
+	rmSync(handoffPath(dir), { force: true });
+	removeMirrors(dir);
 }
 
 /**
@@ -101,8 +101,8 @@ export function clearHandoff(cwd: string): void {
  * outcome — `run.ts` deliberately leaves it alone) keeps writing to ITS OWN
  * file and cannot clobber the comments of the next review.
  */
-function notesPathFor(cwd: string, stamp: string): string {
-	return join(reviewsDir(cwd), `notes-${stamp.slice(0, 19).replace(/:/g, "-")}.json`);
+function notesPathFor(dir: string, stamp: string): string {
+	return join(dir, `notes-${stamp.slice(0, 19).replace(/:/g, "-")}.json`);
 }
 
 /**
@@ -110,8 +110,8 @@ function notesPathFor(cwd: string, stamp: string): string {
  * it in the first place); the legacy name is the fallback when there is no
  * handoff or it has a foreign schema.
  */
-export function mirrorPath(cwd: string): string {
-	return readHandoff(cwd)?.notesPath ?? notesPath(cwd);
+export function mirrorPath(dir: string): string {
+	return readHandoff(dir)?.notesPath ?? notesPath(dir);
 }
 
 /** Marker of a review the user cancelled in the viewer; named after its mirror. */
@@ -134,9 +134,9 @@ interface ReviewOutcome {
  * treated as no cancellation: losing a review to a corrupted byte would be worse
  * than delivering comments the user meant to drop.
  */
-export function reviewCancelled(cwd: string): boolean {
-	const handoff = readHandoff(cwd);
-	const path = handoff?.outcomePath ?? outcomePathFor(handoff?.notesPath ?? notesPath(cwd));
+export function reviewCancelled(dir: string): boolean {
+	const handoff = readHandoff(dir);
+	const path = handoff?.outcomePath ?? outcomePathFor(handoff?.notesPath ?? notesPath(dir));
 	let raw: string;
 	try {
 		raw = readFileSync(path, "utf8");
@@ -169,35 +169,34 @@ function toHandoffChangeset(changeset: Changeset): HandoffChangeset {
  * `collect` could pick up someone else's notes. Returns the handoff path.
  */
 export function writeHandoff(
-	cwd: string,
-	options: { changesets: Changeset[]; activeId: string; hunkBin: string; stamp: string },
+	dir: string,
+	options: { root: string; changesets: Changeset[]; activeId: string; hunkBin: string; stamp: string },
 ): string {
-	const dir = reviewsDir(cwd);
 	mkdirSync(dir, { recursive: true });
 	// Nobody reads past reviews' mirrors any more (pending is cleared), and a
 	// live viewer, if one is still open, simply recreates its own — on the next flush.
 	removeMirrors(dir);
 
-	const notes = notesPathFor(cwd, options.stamp);
+	const notes = notesPathFor(dir, options.stamp);
 	const handoff: HunkHandoff = {
 		version: 1,
-		root: cwd,
+		root: options.root,
 		notesPath: notes,
 		outcomePath: outcomePathFor(notes),
 		hunkBin: options.hunkBin,
 		activeId: options.activeId,
 		changesets: options.changesets.map(toHandoffChangeset),
 	};
-	const path = handoffPath(cwd);
+	const path = handoffPath(dir);
 	writeFileSync(path, `${JSON.stringify(handoff, null, 2)}\n`, "utf8");
 	return path;
 }
 
 /** null — no handoff, or it has an unknown schema (no reason to fail collection). */
-export function readHandoff(cwd: string): HunkHandoff | null {
+export function readHandoff(dir: string): HunkHandoff | null {
 	let raw: string;
 	try {
-		raw = readFileSync(handoffPath(cwd), "utf8");
+		raw = readFileSync(handoffPath(dir), "utf8");
 	} catch {
 		return null;
 	}

@@ -16,6 +16,14 @@ import type { Launcher } from "../src/launcher/index.ts";
 
 let dir: string;
 
+/**
+ * The review state directory — since D30 it is not inside the reviewed tree, so
+ * the test keeps it apart from `dir` too.
+ */
+function stateDir(): string {
+	return join(dir, "state");
+}
+
 /** "Window alive" flag file: the test creates and removes it, the stub watches it. */
 function alivePath(): string {
 	return join(dir, "window-alive");
@@ -46,7 +54,7 @@ function makeLauncher(kittyBin: string): { launcher: Launcher; env: NodeJS.Proce
 		NOTABENE_KITTY: kittyBin,
 		NOTABENE_HUNK: "/opt/hunk/bin/hunk",
 	};
-	return { launcher: kittyLauncher({ detected: detectEnvironment(env), cwd: dir }), env };
+	return { launcher: kittyLauncher({ detected: detectEnvironment(env), stateDir: stateDir() }), env };
 }
 
 async function openDefault(launcher: Launcher, env: NodeJS.ProcessEnv): Promise<void> {
@@ -60,8 +68,8 @@ async function openDefault(launcher: Launcher, env: NodeJS.ProcessEnv): Promise<
 
 /** The extension creates the mirror on load — that is how we see the viewer started. */
 function pretendExtensionLoaded(): void {
-	mkdirSync(join(dir, ".claude", "reviews"), { recursive: true });
-	writeFileSync(join(dir, ".claude", "reviews", "notes.json"), "[]\n");
+	mkdirSync(stateDir(), { recursive: true });
+	writeFileSync(join(stateDir(), "notes.json"), "[]\n");
 }
 
 beforeEach(() => {
@@ -160,7 +168,7 @@ describe("kitty launcher (flow B) on a stub command", () => {
 	});
 
 	test("kitty unavailable (no socket) — open fails with the detection reason", async () => {
-		const launcher = kittyLauncher({ detected: detectEnvironment({}), cwd: dir });
+		const launcher = kittyLauncher({ detected: detectEnvironment({}), stateDir: stateDir() });
 		await assert.rejects(
 			async () =>
 				launcher.open({ cwd: dir, env: {}, handoffPath: join(dir, "handoff.json"), label: "x" }),
@@ -168,12 +176,11 @@ describe("kitty launcher (flow B) on a stub command", () => {
 		);
 	});
 
-	test("collect reads the comment mirror from the review root", async () => {
+	test("collect reads the comment mirror from the review state directory", async () => {
 		const { launcher } = makeLauncher(stubKitty());
-		const reviews = join(dir, ".claude", "reviews");
-		mkdirSync(reviews, { recursive: true });
+		mkdirSync(stateDir(), { recursive: true });
 		writeFileSync(
-			join(reviews, "notes.json"),
+			join(stateDir(), "notes.json"),
 			JSON.stringify([
 				{ id: "user:1", source: "user", file: "a.txt", side: "new", oldRange: null, newRange: [2, 4], body: "[b] broken" },
 			]),

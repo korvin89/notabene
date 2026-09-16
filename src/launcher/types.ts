@@ -14,10 +14,14 @@ import type { LauncherEnvironment } from "./detect.ts";
 /** Strategy chain: herdr → kitty → manual (ARCHITECTURE.md §5, DECISIONS.md D4). */
 export type LauncherName = "herdr" | "kitty" | "manual";
 
-/** Everything an adapter needs at construction: detection and the review root (for collection). */
+/**
+ * Everything an adapter needs at construction: detection and the review state
+ * directory. The latter is NOT the review root — collection reads the handoff
+ * and the mirror, and since D30 those live outside the repository.
+ */
 export interface LauncherContext {
 	detected: LauncherEnvironment;
-	cwd: string;
+	stateDir: string;
 }
 
 export type DoneReason =

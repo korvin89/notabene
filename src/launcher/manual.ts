@@ -80,7 +80,7 @@ export function manualLauncher(ctx: LauncherContext): Launcher {
 		},
 
 		async collect(): Promise<ReviewComment[]> {
-			return collectComments(ctx.cwd);
+			return collectComments(ctx.stateDir);
 		},
 	};
 }

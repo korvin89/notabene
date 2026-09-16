@@ -1,7 +1,12 @@
 // The flow (ARCHITECTURE.md §1, §5):
 //
 //   !ntb → resolve the session → changesets (Current + T1..Tn) → handoff →
-//           → launcher → block → collect → batch to stdout + JSON copy next to it
+//           → launcher → block → collect → batch to stdout + JSON copy
+//
+// Two directories travel together through this file and must not be confused:
+// `root` is the review root (the repository — patch paths and batch references
+// are computed from it), `stateDir` is where our own files live, outside the
+// tree (D30).
 //
 // Changesets are written into the handoff file wholesale — the hunk extension
 // builds the turn switcher from it; the launcher only starts the viewer and waits.
@@ -29,7 +34,8 @@ import { newReviewDocument } from "./model/review.ts";
 import type { CommentStore, ReviewComment, ReviewDocument } from "./model/review.ts";
 import { resolveSession } from "./session/index.ts";
 import type { SessionContext, SessionInfo } from "./session/types.ts";
-import { fileCommentStore } from "./store/index.ts";
+import { fileCommentStore, reviewStateDir } from "./store/index.ts";
+import { migrateLegacyState } from "./store/migrate.ts";
 import { localIsoTimestamp } from "./time.ts";
 
 export type RunMode =
@@ -66,14 +72,15 @@ export async function run(options: RunOptions): Promise<ExitCode> {
 	);
 
 	const root = await reviewRoot(session.cwd);
-	const store = fileCommentStore(root);
+	const stateDir = resolveStateDir(root, options.ctx.claudeDir);
+	const store = fileCommentStore(stateDir);
 	await ensureNoPending(store);
 	// `ntb open` is an explicit ask to open the viewer here: no detection needed.
 	const launcher = options.mode === "open"
-		? explicitOpenLauncher({ env: options.ctx.env, cwd: root })
+		? explicitOpenLauncher({ env: options.ctx.env, stateDir })
 		: selectLauncher({
 			env: options.ctx.env,
-			cwd: root,
+			stateDir,
 			...(options.launcher !== null ? { force: options.launcher } : {}),
 		});
 
@@ -88,7 +95,8 @@ export async function run(options: RunOptions): Promise<ExitCode> {
 	try {
 		await store.savePending(document);
 		// The local name is not `handoffPath`: that is the imported function's name.
-		const handoffFile = writeHandoff(root, {
+		const handoffFile = writeHandoff(stateDir, {
+			root,
 			changesets,
 			activeId: changeset.id,
 			hunkBin: resolveHunkBinary(options.ctx.env),
@@ -144,16 +152,15 @@ export async function run(options: RunOptions): Promise<ExitCode> {
 			break;
 	}
 
-	return finish(store, root, document, await launcher.collect(), options.includeContext);
+	return finish(store, stateDir, document, await launcher.collect(), options.includeContext);
 }
 
 /**
- * The review root: changeset paths and batch references are computed from it,
- * and `.claude/reviews/` lives in it. It is the git repository root, NOT the
- * session cwd: `git diff` prints paths from the root anyway, so for a session
- * started in a subdirectory a `@pkg/deep/file.ts` reference would match neither
- * Claude Code's cwd nor `handoff.root` (and the session files would land in the
- * subdirectory). Outside a repository the cwd itself remains.
+ * The review root: changeset paths and batch references are computed from it.
+ * It is the git repository root, NOT the session cwd: `git diff` prints paths
+ * from the root anyway, so for a session started in a subdirectory a
+ * `@pkg/deep/file.ts` reference would match neither Claude Code's cwd nor
+ * `handoff.root`. Outside a repository the cwd itself remains.
  */
 async function reviewRoot(cwd: string): Promise<string> {
 	const toplevel = await gitToplevel(cwd);
@@ -163,7 +170,20 @@ async function reviewRoot(cwd: string): Promise<string> {
 }
 
 /**
- * The handoff and the comment mirror in `.claude/reviews/` are per-repository,
+ * Where our own files live — outside the reviewed tree (D30). Every entry point
+ * goes through here, which is also the one place that carries a pre-D30 in-tree
+ * directory over; a review prepared before the upgrade would otherwise be
+ * unreachable for `collect`.
+ */
+function resolveStateDir(root: string, claudeDir: string): string {
+	const dir = reviewStateDir(root, claudeDir);
+	migrateLegacyState(root, dir);
+	log.debug(`review state: ${dir} (root: ${root})`);
+	return dir;
+}
+
+/**
+ * The handoff and the comment mirror are per-repository,
  * so a new run on top of an unfinished session (the viewer is still open — here
  * or in a parallel session) would wipe its comments. Instead of a silent
  * overwrite — refuse and exit: `collect` will either deliver the batch or
@@ -189,25 +209,25 @@ async function ensureNoPending(store: CommentStore): Promise<void> {
  */
 async function finish(
 	store: CommentStore,
-	root: string,
+	stateDir: string,
 	document: ReviewDocument,
 	comments: ReviewComment[],
 	includeContext: boolean,
 ): Promise<ExitCode> {
-	if (reviewCancelled(root)) {
+	if (reviewCancelled(stateDir)) {
 		const dropped = comments.length === 0
 			? ""
 			: ` — ${comments.length} comment${comments.length === 1 ? "" : "s"} discarded`;
 		log.info(`Review cancelled in the viewer${dropped}; stdout is empty.`);
 		await store.clearPending();
-		clearHandoff(root);
+		clearHandoff(stateDir);
 		return EXIT.ok;
 	}
 
 	if (comments.length === 0) {
 		log.info("No comments — stdout is empty.");
 		await store.clearPending();
-		clearHandoff(root);
+		clearHandoff(stateDir);
 		return EXIT.ok;
 	}
 
@@ -216,7 +236,7 @@ async function finish(
 	await stdoutDelivery().deliver(filled, { jsonPath, includeContext });
 	await store.clearPending();
 	// The comments are already in the model and the JSON copy: session files can go.
-	clearHandoff(root);
+	clearHandoff(stateDir);
 	return EXIT.ok;
 }
 
@@ -225,15 +245,16 @@ async function finish(
  * the comment mirror is read the same way for every flow from the review directory.
  */
 async function runCollect(options: RunOptions): Promise<ExitCode> {
-	const cwd = await resolveReviewRoot(options, "the batch reaches Claude only via `ntb collect`");
-	const store = fileCommentStore(cwd);
+	const root = await resolveReviewRoot(options, "the batch reaches Claude only via `ntb collect`");
+	const stateDir = resolveStateDir(root, options.ctx.claudeDir);
+	const store = fileCommentStore(stateDir);
 	const pending = await store.loadPending();
 	if (pending === null) {
 		throw new ReviewError(
 			"nothing to collect: no unfinished review session found. Run `/ntb` or `ntb open` first.",
 		);
 	}
-	return finish(store, cwd, pending, collectComments(cwd), options.includeContext);
+	return finish(store, stateDir, pending, collectComments(stateDir), options.includeContext);
 }
 
 /**
@@ -254,10 +275,11 @@ async function openPrepared(options: RunOptions): Promise<ExitCode | null> {
 		cwd = options.ctx.cwd;
 	}
 	cwd = await reviewRoot(cwd);
+	const stateDir = resolveStateDir(cwd, options.ctx.claudeDir);
 
-	const store = fileCommentStore(cwd);
+	const store = fileCommentStore(stateDir);
 	const pending = await store.loadPending();
-	const handoff = readHandoff(cwd);
+	const handoff = readHandoff(stateDir);
 	if (pending === null || handoff === null) {
 		if (sessionError !== null) {
 			throw new ReviewError(
@@ -277,11 +299,11 @@ async function openPrepared(options: RunOptions): Promise<ExitCode | null> {
 	}
 
 	const active = handoff.changesets.find((changeset) => changeset.id === handoff.activeId);
-	const launcher = explicitOpenLauncher({ env: options.ctx.env, cwd });
+	const launcher = explicitOpenLauncher({ env: options.ctx.env, stateDir });
 	await launcher.open({
 		cwd,
 		env: options.ctx.env,
-		handoffPath: handoffPath(cwd),
+		handoffPath: handoffPath(stateDir),
 		label: active?.label ?? "prepared review",
 	});
 	log.info("When you're done, run `ntb collect` in the Claude Code session — the batch will land in the context.");

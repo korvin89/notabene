@@ -21,12 +21,13 @@ re-checked on 2026-09-14 after the rename and the distribution work.
 - `hunk` in the machine-readable copy is always `null` — the extension does not
   mirror the hunk index.
 - A viewer that outlives `collect` re-creates its comment mirror on quit, after
-  cleanup already removed it: `.claude/reviews/` keeps a `notes-<stamp>.json` with
+  cleanup already removed it: the state directory keeps a `notes-<stamp>.json` with
   no `pending.json` or `handoff.json` beside it. Observed 2026-09-16 — collected at
   ~14:55, the file reappeared at 15:01 when the viewer closed. Harmless rather than
   dangerous: mirror names are unique per review (D15), so nothing is clobbered and
   no later run is blocked; readers take the path from the handoff, which is gone, so
-  the orphan is inert. It is litter that accumulates in the review directory.
+  the orphan is inert. It is litter that accumulates in the state directory — since
+  D30 outside the repository, so it no longer reaches anyone's `git status`.
 
 ## Performance
 
@@ -42,7 +43,7 @@ re-checked on 2026-09-14 after the rename and the distribution work.
   and artifact `version` fields are refusal gates, never upgrades. Deferred on
   purpose until it bites: the cheap fix is a version floor checked in the skill
   via `ntb --version`, not a migration — nothing durable is read back today
-  (the final copies in `.claude/reviews/` are write-only).
+  (the final copies in the state directory are write-only).
 - `applyStructuredPatch` does not check hunk order.
 - Open questions never probed: how kitty polling tolerates a client failure,
   `a//abs/path` in the patch for files outside the review root, the `matched` field

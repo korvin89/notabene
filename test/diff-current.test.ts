@@ -5,10 +5,11 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import process from "node:process";
 import { after, describe, test } from "node:test";
 import { currentChangesets, parseGitPatch } from "../src/diff/current.ts";
+import { reviewStateDir } from "../src/store/index.ts";
 import type { DiffSourceOptions } from "../src/diff/index.ts";
 import type { Changeset, FileDiff } from "../src/model/diff.ts";
 import type { SessionInfo } from "../src/session/types.ts";
@@ -288,19 +289,25 @@ describe("current: applicability boundaries", () => {
 		assert.match(captured.join(""), /is not a git repository/);
 	});
 
-	test("the review's own service files do not end up in its own diff", async () => {
-		// Without this the handoff of the previous run becomes an untracked file of the
-		// next one, its text travels into the newText of the new handoff — which then
-		// grows severalfold per run.
+	test("a state directory inside the repository does not end up in its own diff", async () => {
+		// Since D30 the state normally lives outside the tree, but CLAUDE_CONFIG_DIR
+		// may point into the repository — and then the pre-D30 failure is back:
+		// the previous run's handoff becomes an untracked file of the next one and
+		// its text travels into the newText of the new handoff, growing it
+		// severalfold per run.
 		const fixture = repo();
 		fixture.write("a.txt", "a\n");
 		commitAll(fixture);
-		fixture.write(".claude/reviews/handoff.json", '{"version":1}\n');
-		fixture.write(".claude/reviews/notes-2026-09-14T12-00-00.json", "[]\n");
+
+		const options = fixture.options();
+		const state = relative(fixture.root, reviewStateDir(fixture.root, options.claudeDir));
+		assert.ok(!state.startsWith(".."), "the fixture must put the state inside the repo for this test");
+		fixture.write(join(state, "handoff.json"), '{"version":1}\n');
+		fixture.write(join(state, "notes-2026-09-14T12-00-00.json"), "[]\n");
 		fixture.write("edit.txt", "visible\n");
 
-		const changeset = await soleChangeset(fixture);
-		assert.deepEqual(changeset.files.map((file) => file.path), ["edit.txt"]);
+		const changesets = await currentChangesets(options);
+		assert.deepEqual((changesets[0] as Changeset).files.map((file) => file.path), ["edit.txt"]);
 	});
 
 	test("clean working tree: an empty list, not an error", async () => {

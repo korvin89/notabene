@@ -154,7 +154,7 @@ checked, so there is nothing to re-look-for. Emulating them is separate work on
 top of the extension pane; we'll come back if it starts to hurt.
 
 ### D10. Machine-readable copies go to `<repo>/.claude/reviews/`, no rotation
-2026-09-13 · in effect
+2026-09-13 · revoked by D30 (the location; "no rotation" stands)
 
 **Why.** Next to the repository (easy to find, easy to delete), one line in
 `.gitignore`. The copies are tiny (0.5–1.2 KB) and form the only review
@@ -223,7 +223,7 @@ with the turn switcher (it contains the full texts of both sides). Machine-reada
 copies remain (D10).
 
 ### D17. Review housekeeping files don't end up in their own diff
-2026-09-14 · in effect
+2026-09-14 · in effect · scope revised by D30
 
 `.claude/reviews/` is dropped from the current diff regardless of the user's
 `.gitignore`. Otherwise the previous run's handoff became an untracked file of the
@@ -560,3 +560,59 @@ explicit `Bash(ntb:*)` rule. A forgotten viewer now refuses new reviews for four
 hours rather than thirty minutes; `collect` still ends it at any point. `ntb`
 itself learns nothing about its caller: no flag, no branch, and the batch header
 (§3.1) is untouched, so this is not a contract change.
+
+### D30. Review state leaves the repository for `<claudeDir>/notabene/<slug>/`
+2026-09-16 · in effect · revokes D10, revises the scope of D17
+
+Everything `ntb` writes — the handoff, the comment mirror, `pending.json`, the
+machine-readable copies — moves out of the reviewed tree into
+`<claudeDir>/notabene/<projectSlug(root)>/`. `claudeDir` is `CLAUDE_CONFIG_DIR`
+or `~/.claude`; the slug is the one `session/transcript.ts` already computes to
+find transcripts. Nothing is written into the repository any more.
+
+**Why.** `<repo>/.claude/reviews/` cost more than it looked. It made us ask
+every user for a `.gitignore` line in every repository they review. It is the
+sole reason D17 exists — the diff has to exclude its own artifacts, and when it
+did not, the previous run's handoff became an untracked file of the next one and
+its text travelled into the new handoff's `newText`: 650 B → 16,913 B over four
+runs. And the handoff is the heavy file — 116 KB for one four-file changeset,
+megabytes with the turn switcher — written straight under whatever file watcher
+the project has running.
+
+**Why `~/.claude` and not our own directory.** The tool is already inseparable
+from it: sessions, transcripts and file-history are all read from there
+(§4). Putting our state anywhere else would mean a second location to explain
+and a second override to invent, while `CLAUDE_CONFIG_DIR` already exists and
+is already how the tests substitute the directory. `~/Library/Application
+Support/notabene/` was the formally correct macOS answer and was rejected on
+exactly that: a separate namespace buys nothing here and costs a hook we would
+have to build.
+
+**Why the copies moved too, rather than being dropped.** Nothing reads them
+back, and the cycle that would have (resolved marks) is cut — D21. But the batch
+is one-shot: it goes to stdout, and if stdout does not reach the agent the
+comments are gone. That has happened here (a test with no `cwd` ate a real
+review). So the copies stay, as a fallback for a failed delivery rather than as
+"review history" — which is also why they are not rotated at 0.5–1.2 KB apiece.
+Keeping them in the repository while moving the rest was rejected: it would
+preserve both the `.gitignore` ask and D17, i.e. half the cost for none of the
+benefit.
+
+**What it costs.** The batch tail path becomes absolute — relative to the
+repository root it stopped resolving. `projectSlug` is lossy (every
+non-alphanumeric character becomes a hyphen), so `~/w/a-b` and `~/w/a/b` share a
+directory; the consequence is a spurious "unfinished review" refusal, not data
+loss (mirror names are per-review, D15), and Claude Code itself lives with the
+same property. A directory is orphaned when its repository is deleted; no sweep
+is written until that hurts (D22).
+
+**D17 is not gone, it is generalised.** `CLAUDE_CONFIG_DIR` may point *into* the
+repository (a project-local Claude Code config), and then the whole failure
+returns. So the diff still excludes the state directory — computed, wherever it
+happens to be, instead of hardcoded as `.claude/reviews/`.
+
+**Migration.** The first run moves a pre-D30 `<repo>/.claude/reviews/` over and
+removes the directory (`store/migrate.ts`). It carries the in-flight review too:
+a viewer opened before the upgrade would otherwise hold comments that `collect`
+answers "nothing to collect" to. Files we do not recognise are left alone and
+keep the directory alive — the move is ours to make, the user's files are not.
