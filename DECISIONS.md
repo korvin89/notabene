@@ -445,6 +445,18 @@ stays `read`, so every workflow still declares the scopes it needs. Requiring
 approvals on `main` later means revisiting this, since the same setting is what
 lets a workflow approve pull requests.
 
+**Amendment 2, 2026-09-16.** The first release came out tagged `notabene-v0.2.0`,
+not `v0.2.0`: in manifest mode `include-component-in-tag` defaults to **true**, and
+the component is the package name. `include-v-in-tag`, which we did check, only
+governs the letter `v`. The consequence was silent in the worst way — the release
+succeeded, the changelog was right, and `install.sh` simply did not see the tag,
+because it selects releases with `v[0-9]*`; installs would have gone on tracking
+`main` as though nothing had been released. The config now sets
+`include-component-in-tag: false`, the bad tag and its GitHub release were deleted,
+and `v0.2.0` was recreated on the same content. That deletion is the one case the
+"tags are never withdrawn" rule does not cover: no install could have been made
+from a tag the installer cannot match in the first place.
+
 ### D28. Complete and Cancel are commands of ours; delivery stays the default outcome
 2026-09-15 · in effect
 
