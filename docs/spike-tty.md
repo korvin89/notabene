@@ -194,6 +194,21 @@ delivery works, and a global timeout tweak for the sake of one scenario affects 
 `!` commands and the agent's Bash tool. Whoever needs strict synchrony — the option in settings.json
 is mentioned in the README as voluntary.
 
+### Amendment 2026-09-16: the probe measured delivery, not wake-up
+
+Probe 3 and both closures above ask one question — *does the text arrive whole?* — and
+answer it correctly. They never ask the second one: **does the notification wake an agent
+that has already finished its turn?** For a `!`-command it does not. The command belongs to
+the user, there is no agent turn to re-invoke, and the batch sits in the task file until the
+user writes to the agent. Both live closures hid this, because in each the human typed a
+message afterwards.
+
+So the sentence above — "Claude, upon the notification, read the file **by himself**" — holds
+only for a session that was going to run anyway. Measured on 2026-09-16: the same detach under
+a **Bash-tool** call does re-invoke the idle agent, with no human message, which is what moved
+the entry point to `/ntb` (D29). The conclusion about the batch header still stands: it needed
+no change then and needs none now.
+
 ## Verdict
 
 **Launching the viewer from `!` via `/dev/tty`, as laid down in the spec, does not work.** One

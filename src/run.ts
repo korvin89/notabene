@@ -111,17 +111,21 @@ export async function run(options: RunOptions): Promise<ExitCode> {
 	// Flow C: the viewer lives on its own, nothing to wait for — exit with empty
 	// stdout and say how to finish. Same for an explicit `open`.
 	if (!launcher.blocking || options.mode === "open") {
-		log.info("When you're done, run `!ntb collect` in the Claude Code session — the batch will land in the context.");
+		log.info("When you're done, run `ntb collect` in the Claude Code session — the batch will land in the context.");
 		return EXIT.ok;
 	}
 
-	// A review almost always runs longer than two minutes, so the user WILL see
-	// "moved to the background" — and must know it is not a failure (docs/spike-tty.md, probe 3).
+	// A review almost always outlasts the caller's patience, so the user WILL see
+	// "moved to the background" — and must know it is not a failure (docs/spike-tty.md,
+	// probe 3). The ceiling is neither ours nor fixed: 120 s for a `!` command
+	// (BANG_DETACH_MS), but whatever `timeout` the agent passed when the Bash tool
+	// runs us — measured live at 600 s. So the warning names the effect and never a
+	// number it cannot know.
 	if (options.timeoutMs > BANG_DETACH_MS) {
 		log.info(
-			`Waiting for the viewer. In ~${Math.round(BANG_DETACH_MS / 1000)} s Claude Code will stop waiting `
-				+ "and move this command to the background — that is normal: the viewer stays open, "
-				+ "and the comments will arrive with the background-task completion notification.",
+			"Waiting for the viewer. Claude Code may stop waiting and move this command to the "
+				+ "background before you are done — that is normal: the viewer stays open, and the "
+				+ "comments arrive with the background-task completion notification.",
 		);
 	}
 
@@ -173,7 +177,7 @@ async function ensureNoPending(store: CommentStore): Promise<void> {
 		: "the current state";
 	throw new ReviewError(
 		`there is already an unfinished review of ${subject} (started ${pending.createdAt}) — the viewer `
-			+ "may still be open in this window or in a parallel session. Run `!ntb collect` first: it "
+			+ "may still be open in this window or in a parallel session. Run `ntb collect` first: it "
 			+ "will print that review's batch (or silently dismiss an empty session), then retry.",
 	);
 }
@@ -221,12 +225,12 @@ async function finish(
  * the comment mirror is read the same way for every flow from the review directory.
  */
 async function runCollect(options: RunOptions): Promise<ExitCode> {
-	const cwd = await resolveReviewRoot(options, "the batch reaches Claude only via `!ntb collect`");
+	const cwd = await resolveReviewRoot(options, "the batch reaches Claude only via `ntb collect`");
 	const store = fileCommentStore(cwd);
 	const pending = await store.loadPending();
 	if (pending === null) {
 		throw new ReviewError(
-			"nothing to collect: no unfinished review session found. Run `!ntb` or `ntb open` first.",
+			"nothing to collect: no unfinished review session found. Run `/ntb` or `ntb open` first.",
 		);
 	}
 	return finish(store, cwd, pending, collectComments(cwd), options.includeContext);
@@ -258,7 +262,7 @@ async function openPrepared(options: RunOptions): Promise<ExitCode | null> {
 		if (sessionError !== null) {
 			throw new ReviewError(
 				`no prepared review in ${cwd}, and the session could not be resolved. `
-					+ "Run `!ntb` in the Claude Code session first — then `ntb open` here.",
+					+ "Run `/ntb` in the Claude Code session first — then `ntb open` here.",
 			);
 		}
 		return null;
@@ -280,7 +284,7 @@ async function openPrepared(options: RunOptions): Promise<ExitCode | null> {
 		handoffPath: handoffPath(cwd),
 		label: active?.label ?? "prepared review",
 	});
-	log.info("When you're done, run `!ntb collect` in the Claude Code session — the batch will land in the context.");
+	log.info("When you're done, run `ntb collect` in the Claude Code session — the batch will land in the context.");
 	return EXIT.ok;
 }
 

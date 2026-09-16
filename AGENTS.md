@@ -18,8 +18,10 @@ text lands in the agent's context. TypeScript, Node 22 with no build step, macOS
 | Batch and JSON-copy format | ARCHITECTURE.md §3 |
 | Claude Code formats (sessions, transcript, file-history) | ARCHITECTURE.md §4 |
 | The three launch flows and the kitty/herdr pitfalls | ARCHITECTURE.md §5 |
+| The two entry points and who owns the process | ARCHITECTURE.md §5.6 |
 | How it is installed and updated | ARCHITECTURE.md §7 |
 | How versions, tags and the changelog work | ARCHITECTURE.md §7.1 |
+| The plugin channel — how `/ntb` reaches the user | ARCHITECTURE.md §7.2 |
 
 Code map — ARCHITECTURE.md §2 (the `src/` tree with each file's purpose).
 

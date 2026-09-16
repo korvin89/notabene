@@ -1,6 +1,6 @@
 # notabene: architecture
 
-Diff review for Claude Code. `!ntb` from the session shows the changes in the
+Diff review for Claude Code. `/ntb` from the session shows the changes in the
 external [hunk](https://hunk.dev) viewer, collects inline comments and prints
 them as a batch to stdout — from there the text lands in the agent's context.
 
@@ -11,7 +11,7 @@ Why it is this way — [DECISIONS.md](DECISIONS.md). How to use it — [README.m
 ## 1. Flow
 
 ```
-!ntb
+/ntb  (the plugin skill; the agent runs `ntb` blocking, §5.6)
   → session resolve (env → pid chain)
   → review root = git repository root
   → changesets: Current + T1..Tn (this is also the turn switcher)
@@ -19,6 +19,9 @@ Why it is this way — [DECISIONS.md](DECISIONS.md). How to use it — [README.m
   → block until the viewer closes
   → read the comment mirror → batch to stdout + JSON copy
 ```
+
+`!ntb` typed by the user runs the same code and produces the same batch. The two
+entry points diverge only past the detach ceiling (§5.6).
 
 The viewer lives **outside** the `!`-command: the command has no controlling
 terminal (§5). Three ways to show it — a Herdr pane, a kitty tab, manually in a
@@ -31,6 +34,10 @@ An empty review (no changes or no comments) — empty stdout, the agent stays si
 ```
 ntb                     sh wrapper: the single entry point, resolves symlinks, execs node
 install.sh              install and update: clone → tag → npm ci → symlinks (§7)
+.claude-plugin/         the Claude Code plugin (§7.2) — how `/ntb` reaches the user
+├── marketplace.json    marketplace manifest: `/plugin marketplace add`
+├── plugin.json         plugin manifest; `version` is bumped by release-please
+└── skills/ntb/SKILL.md the agent-facing instruction: run blocking, never in background
 src/
 ├── cli.ts              argument parsing, exit codes, Ctrl-C
 ├── run.ts              the whole flow: session → root → changesets → launcher → collection
@@ -302,18 +309,42 @@ where a development checkout is never on `PATH` and a stranger's `ntb` might be.
 - **Review root** — the git repository root (`git rev-parse --show-toplevel`
   from the session cwd); outside a repository — the cwd itself. Changeset paths
   and batch references are computed from it; `.claude/reviews/` lives in it.
-- **The `!`-command ceiling is 120 s** (the `BASH_DEFAULT_TIMEOUT_MS` default).
-  Past that, Claude Code detaches the command ("moved to the background") but
-  doesn't kill it: the viewer lives on, the batch arrives as a
-  background-task-completed notification, from whose file the agent reads the
-  text.
-- **Viewer wait timeout — 30 minutes** (`--timeout`). On expiry we exit with
+- **The detach ceiling belongs to the caller, not to us**: 120 s for a
+  `!`-command (the `BASH_DEFAULT_TIMEOUT_MS` default, `BANG_DETACH_MS`), and the
+  `timeout` the agent passes for `/ntb` — 600 s, the Bash tool's maximum. Past it
+  Claude Code detaches the command ("moved to the background") but doesn't kill
+  it: the viewer lives on and the batch goes to the task file. Who reads that
+  file, and when, is §5.6. Because the number is the caller's, the stderr warning
+  names the effect and never a duration.
+- **Viewer wait timeout — 4 hours** (`--timeout`). On expiry we exit with
   empty stdout and leave the viewer open: `collect` will pick up the comments.
+  It was 30 minutes until a live run expired mid-review and cost the delivery
+  path (D29); expiry is a fallback, not a normal ending.
 - **Ctrl-C** interrupts the wait in both blocking flows (exit 130); the viewer
   is left alone.
 - **One review per repository at a time**: the session files are shared, so a
   run on top of an unfinished review session is a refusal with a hint, not a
   silent overwrite.
+
+### 5.6. Who owns the process
+
+The two entry points run identical code and differ in one thing: whose process it
+is. That decides what happens after the detach.
+
+| | `/ntb` (plugin skill) | `!ntb` (typed by the user) |
+|---|---|---|
+| owner | a Bash-tool call inside an agent turn | the user's local command |
+| under the ceiling | batch returns inline in the tool result | batch is part of the user's next message |
+| past the ceiling | the completion notification **re-invokes the agent**, which reads the task file and acts | nothing to re-invoke: the batch waits for the user to write to the agent |
+
+That asymmetry is the whole reason the plugin exists (D29). It also fixes the
+shape of the skill's instruction: the agent must call `ntb` **blocking**, with the
+harness's maximum timeout, and must never use `run_in_background` — a detached
+interactive TUI launcher is unreliable, and the polling loop it invites leaves the
+session idle exactly when the review finishes.
+
+`ntb` itself knows none of this. It has no flag for the caller, no branch on it,
+and the batch header (§3.1) is the same either way.
 
 ## 6. Invariants
 
@@ -368,9 +399,8 @@ Re-running the installer is the same code path as `update`, so "install" and
 "update" cannot drift apart. `npm` is stubbed in `test/install.test.ts`: the real
 `npm ci` pulls a ~100 MB viewer binary.
 
-A Claude Code plugin is the natural second channel when one is wanted: a plugin's
-`bin/` lands on the Bash tool's `PATH`, and this repository plus a manifest is all
-it takes.
+The Claude Code plugin is the second channel — §7.2. It ships the entry point, not
+the code, so the two channels are not alternatives: both are needed for `/ntb`.
 
 ### 7.1. Versioning and releases
 
@@ -402,9 +432,34 @@ withdrawn release would live on in every existing install. And "newest" is only
 well defined because of the two rules above — the installer and `ntb update` both
 take the first of `git tag --list 'v[0-9]*' --sort=-v:refname`.
 
+### 7.2. The plugin channel
+
+`.claude-plugin/` makes this repository its own single-plugin marketplace:
+
+```
+/plugin marketplace add korvin89/notabene    → marketplace.json
+/plugin install ntb@notabene                 → plugin.json → skills/ntb/SKILL.md
+```
+
+The syntax is `plugin@marketplace`, so the marketplace carries the brand
+(`notabene`) and the plugin the command (`ntb`) — naming both alike is what
+produces the `name@name` stutter seen in comparable plugins.
+
+The plugin ships **no code**: `source` is the repository root, but the only thing
+Claude Code reads from it is the skill. `ntb` itself still comes from `install.sh`,
+so a user needs both. That is a real wart, and the two candidate fixes are for
+`install.sh` to print the two plugin lines, or for the skill to bootstrap the CLI
+on first use; neither is done.
+
+Two version fields live in the manifests, and both are wired into release-please
+`extra-files` (`$.version`, `$.plugins[0].version`). Without that they drift from
+`package.json` at the first release, which §7.1 promises they cannot.
+
 ## 8. Limitations
 
-- A review longer than ~2 minutes becomes asynchronous (§5.5).
+- A long review becomes asynchronous (§5.5); after `!ntb` the batch then waits
+  for the user to write to the agent, because nothing wakes it (§5.6).
+- `/ntb` needs both the CLI and the plugin installed (§7.2).
 - Comments left after switching turns inside the viewer end up in the batch
   under the original turn's header; their `file:line` anchor is their own,
   correct one.

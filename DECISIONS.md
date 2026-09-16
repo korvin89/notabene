@@ -507,3 +507,56 @@ node — so it would mean rendering through hunk internals that no published typ
 covers, plus a `react` import that is only in our tree as hunkdiff's transitive
 dependency (§6 allows one runtime dependency, and this would be a second, implicit
 one). `onActivate` reports a click somewhere in the pane, not on a button.
+
+### D29. The review is launched by the agent (`/ntb`), because only then does a finished review wake it
+2026-09-16 · in effect · amends D12
+
+The entry point is the plugin skill `/ntb` (§7.2): the agent runs `ntb` through
+the Bash tool, blocking, with the harness's maximum timeout (600 s on Claude
+Code) and never `run_in_background`. `!ntb` keeps working unchanged and is
+demoted to the second way in. The viewer wait goes from 30 minutes to 4 hours.
+
+**Why.** A review usually outlives the detach ceiling, and what happens next
+depends on who owns the process — which D12 never asked. Measured live
+2026-09-16, four runs:
+
+- a Bash-tool background task that finished while the agent was idle
+  **re-invoked it** with no human message; reproduced on two real reviews;
+- the notification carries only a summary, the exit code and the task file path —
+  never the batch text, the same shape D12 recorded for the `!` detach. The file
+  is verbatim, stderr included;
+- a review finished inside the 600 s ceiling returned the batch **inline** in the
+  tool result: no file, no notification, no wake-up involved;
+- a `!`-command has no agent turn to return to, so its completion re-invokes
+  nobody. This is why a finished review used to sit until the user wrote again —
+  the defect this entry exists to fix.
+
+Not witnessed: a detach and a non-empty batch in the same run. Both halves are
+shown separately and D12 showed a non-empty batch surviving the detach into a
+task file, so the composition is inferred rather than observed.
+
+**Why not `run_in_background`.** It was the first proposal and it is wrong — on
+borrowed evidence, not ours: we never ran the viewer detached. A shipped
+Claude Code diff-review plugin forbids it outright for interactive TUI launchers,
+reporting that processes get killed unprompted and that the polling loop it
+invites leaves the session idle exactly when the review finishes. Blocking with
+the harness maximum is what that tool and this one arrived at independently.
+Where we go further is past the ceiling: there it asks the user to send a
+message, which is the defect this entry removes.
+
+**Why 4 hours.** At 30 minutes a live run expired mid-review: expiry exits with
+empty stdout, which drops delivery back to a manual `collect` and therefore back
+to needing a human message — reintroducing the whole defect. The old value was
+calibrated for `!ntb`, where the process held the user's command hostage; run
+from the Bash tool it holds nothing and the agent is asleep, so waiting is free.
+
+**Consequences.** `/ntb` needs two installs — the CLI from `install.sh` and the
+plugin — and collapsing them is not done (§7.2). They also update by separate
+paths with nothing checking that they stay in step, which is a new coupling this
+entry creates and deliberately leaves open. A skill's `allowed-tools` does
+**not** bypass the automatic permission-mode classifier: `ntb` was refused twice,
+including through the skill, so the first run needs an ordinary approval or an
+explicit `Bash(ntb:*)` rule. A forgotten viewer now refuses new reviews for four
+hours rather than thirty minutes; `collect` still ends it at any point. `ntb`
+itself learns nothing about its caller: no flag, no branch, and the batch header
+(§3.1) is untouched, so this is not a contract change.
