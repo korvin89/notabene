@@ -76,7 +76,7 @@ function makeRemote(name: string, options: { tag?: string } = {}): string {
 function release(remote: string, version: string, tag: string, options: { skill?: boolean } = {}): void {
 	setVersion(remote, version);
 	if (options.skill === true) {
-		const path = join(remote, ".claude-plugin", "skills", "ntb", "SKILL.md");
+		const path = join(remote, ".claude-plugin", "skills", "review", "SKILL.md");
 		writeFileSync(path, `${readFileSync(path, "utf8")}\nA line the agent now reads.\n`);
 	}
 	git(remote, ["add", "-A"]);

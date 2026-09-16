@@ -503,9 +503,11 @@ so a user needs both. That is a real wart, and the two candidate fixes are for
 `install.sh` to print the two plugin lines, or for the skill to bootstrap the CLI
 on first use; neither is done.
 
-Two version fields live in the manifests, and both are wired into release-please
-`extra-files` (`$.version`, `$.plugins[0].version`). Without that they drift from
-`package.json` at the first release, which §7.1 promises they cannot.
+Three version strings live outside `package.json` and all three are wired into
+release-please `extra-files`: the two manifest fields (`$.version`,
+`$.plugins[0].version`, both `json`) and the floor inside the skill (`generic`).
+Without that they drift from `package.json` at the first release, which §7.1
+promises they cannot.
 
 **The two halves update separately, so `ntb update` reports the other one** (D32).
 It reads Claude Code's own record, `<claudeDir>/plugins/installed_plugins.json`
@@ -522,6 +524,24 @@ manifests' own churn is outside that path by construction.
 
 `ntb update` cannot go further than reporting: the plugin is Claude Code's state,
 not ours, and applying a plugin update needs Claude Code restarted (D32).
+
+**The skill carries a version floor**, and it is there for the drift `ntb update`
+cannot see. A CLI ahead of the skill is harmless — the agent merely fails to know
+about a new flag. A *skill* ahead of the CLI is not: it tells the agent to pass
+arguments this `ntb` has never heard of, and the agent finds out as a usage error
+in the middle of a review. So the skill names the release it ships with and tells
+the agent to compare `ntb --version` against it — but only after a usage error,
+never up front, because a version check on every launch would cost a tool call
+per review to catch something rare.
+
+The number is maintained by release-please rather than by hand: a floor edited
+manually rots within two releases and then misdiagnoses every failure it sees.
+The `generic` updater rewrites the semver on any line carrying an
+`x-release-please-version` annotation — verified against this repository's own
+`SKILL.md` with release-please 17.11.2, one line changed, the rest untouched.
+`test/skill.test.ts` guards the three parts that have to stay true together: the
+annotated line, the `extra-files` entry pointing at it, and the floor matching
+`package.json` right now.
 
 ## 8. Limitations
 
