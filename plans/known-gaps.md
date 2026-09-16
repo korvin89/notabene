@@ -38,15 +38,14 @@ re-checked on 2026-09-14 after the rename and the distribution work.
 
 ## Robustness
 
-- Half-closed by D32: `ntb update` now reports when the plugin is missing or
-  behind on a release that changed the skill. That covers the harmless direction
-  — CLI ahead of the skill, where the agent merely fails to know about a new
-  flag. **The harmful direction is still open**: a skill ahead of the CLI tells
-  the agent to pass flags this `ntb` has never heard of, and it finds out as a
-  usage error mid-review. `ntb update` cannot help there by construction — it
-  runs when the CLI moves. The fix is a floor checked from the skill side
-  (`ntb --version` against a number the skill carries), and whether
-  release-please can keep that number current through `extra-files` is unverified.
+- ~~Nothing checks that the plugin and the CLI are in step.~~ Closed from both
+  ends, 2026-09-16. `ntb update` reports a missing or stale plugin (D32), which
+  covers the CLI-ahead direction; the skill carries a release-please-maintained
+  version floor and checks it after a usage error (§7.2), which covers the
+  skill-ahead one. What is left is a hole neither end sees: a skill whose *prose*
+  changed without any CLI surface changing — no usage error fires, so nothing
+  detects it. Nothing to do about that short of the agent diffing its own
+  instructions, and it degrades to "slightly stale advice", not a failure.
 - A mistyped command (`ntb reviw`) is now read as a revision and fails with
   "unknown revision" plus the list of commands. Honest, but a near-miss check
   would be kinder.
