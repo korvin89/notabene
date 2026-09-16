@@ -1,6 +1,6 @@
 # notabene: architecture
 
-Diff review for Claude Code. `/ntb` from the session shows the changes in the
+Diff review for Claude Code. `/ntb:review` from the session shows the changes in the
 external [hunk](https://hunk.dev) viewer, collects inline comments and prints
 them as a batch to stdout — from there the text lands in the agent's context.
 
@@ -11,7 +11,7 @@ Why it is this way — [DECISIONS.md](DECISIONS.md). How to use it — [README.m
 ## 1. Flow
 
 ```
-/ntb  (the plugin skill; the agent runs `ntb` blocking, §5.6)
+/ntb:review  (the plugin skill; the agent runs `ntb` blocking, §5.6)
   → session resolve (env → pid chain)
   → review root = git repository root
   → changesets: every scope that applies (§4.2) — this is also the scope picker
@@ -34,10 +34,10 @@ An empty review (no changes or no comments) — empty stdout, the agent stays si
 ```
 ntb                     sh wrapper: the single entry point, resolves symlinks, execs node
 install.sh              install and update: clone → tag → npm ci → symlinks (§7)
-.claude-plugin/         the Claude Code plugin (§7.2) — how `/ntb` reaches the user
+.claude-plugin/         the Claude Code plugin (§7.2) — how `/ntb:review` reaches the user
 ├── marketplace.json    marketplace manifest: `/plugin marketplace add`
 ├── plugin.json         plugin manifest; `version` is bumped by release-please
-└── skills/ntb/SKILL.md the agent-facing instruction: run blocking, never in background
+└── skills/review/     the agent-facing instruction: run blocking, never in background
 src/
 ├── cli.ts              argument parsing, exit codes, Ctrl-C
 ├── run.ts              the whole flow: session → root → changesets → launcher → collection
@@ -261,7 +261,7 @@ file-history are not read at all.
 A scope is one git comparison. A run builds every scope that applies and hands
 them all to the viewer, which switches between them with `<`/`>`/`T`; the
 command line only picks which one opens first. The reason the list exists rather
-than a single scope per invocation: with `/ntb` the *agent* starts the review
+than a single scope per invocation: with `/ntb:review` the *agent* starts the review
 (§5.6), so the human never passes the arguments.
 
 | id | Comparison | Untracked | Offered when |
@@ -355,7 +355,7 @@ where a development checkout is never on `PATH` and a stranger's `ntb` might be.
   directory (§3.2) — which itself lives elsewhere.
 - **The detach ceiling belongs to the caller, not to us**: 120 s for a
   `!`-command (the `BASH_DEFAULT_TIMEOUT_MS` default, `BANG_DETACH_MS`), and the
-  `timeout` the agent passes for `/ntb` — 600 s, the Bash tool's maximum. Past it
+  `timeout` the agent passes for `/ntb:review` — 600 s, the Bash tool's maximum. Past it
   Claude Code detaches the command ("moved to the background") but doesn't kill
   it: the viewer lives on and the batch goes to the task file. Who reads that
   file, and when, is §5.6. Because the number is the caller's, the stderr warning
@@ -375,7 +375,7 @@ where a development checkout is never on `PATH` and a stranger's `ntb` might be.
 The two entry points run identical code and differ in one thing: whose process it
 is. That decides what happens after the detach.
 
-| | `/ntb` (plugin skill) | `!ntb` (typed by the user) |
+| | `/ntb:review` (plugin skill) | `!ntb` (typed by the user) |
 |---|---|---|
 | owner | a Bash-tool call inside an agent turn | the user's local command |
 | under the ceiling | batch returns inline in the tool result | batch is part of the user's next message |
@@ -445,7 +445,7 @@ Re-running the installer is the same code path as `update`, so "install" and
 `npm ci` pulls a ~100 MB viewer binary.
 
 The Claude Code plugin is the second channel — §7.2. It ships the entry point, not
-the code, so the two channels are not alternatives: both are needed for `/ntb`.
+the code, so the two channels are not alternatives: both are needed for `/ntb:review`.
 
 ### 7.1. Versioning and releases
 
@@ -483,12 +483,18 @@ take the first of `git tag --list 'v[0-9]*' --sort=-v:refname`.
 
 ```
 /plugin marketplace add korvin89/notabene    → marketplace.json
-/plugin install ntb@notabene                 → plugin.json → skills/ntb/SKILL.md
+/plugin install ntb@notabene                 → plugin.json → skills/review/SKILL.md
+/ntb:review                                  → the skill
 ```
 
-The syntax is `plugin@marketplace`, so the marketplace carries the brand
-(`notabene`) and the plugin the command (`ntb`) — naming both alike is what
-produces the `name@name` stutter seen in comparable plugins.
+Three names, two syntaxes, and both stutter if you let them. Installation is
+`plugin@marketplace`, so the marketplace carries the brand (`notabene`) and the
+plugin the command (`ntb`) — naming both alike is what produces the `name@name`
+seen in comparable plugins. Invocation is `plugin:skill`, which is the same trap
+one level down: the skill was called `ntb` too, and the command came out as
+`/ntb:ntb`. It is named after what it does instead, which also leaves the
+namespace usable — `/ntb:collect` has a CLI command waiting for it if the
+two-step flow ever deserves its own skill.
 
 The plugin ships **no code**: `source` is the repository root, but the only thing
 Claude Code reads from it is the skill. `ntb` itself still comes from `install.sh`,
@@ -504,7 +510,7 @@ Two version fields live in the manifests, and both are wired into release-please
 
 - A long review becomes asynchronous (§5.5); after `!ntb` the batch then waits
   for the user to write to the agent, because nothing wakes it (§5.6).
-- `/ntb` needs both the CLI and the plugin installed (§7.2).
+- `/ntb:review` needs both the CLI and the plugin installed (§7.2).
 - Comments left after switching scope inside the viewer end up in the batch
   under the scope the review opened on; their `file:line` anchor is their own,
   correct one.

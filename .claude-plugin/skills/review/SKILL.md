@@ -1,5 +1,5 @@
 ---
-name: ntb
+name: review
 description: Review the diff in the notabene hunk viewer and act on the comments that come back. Opens the changeset in a Herdr pane, a kitty tab, or by hand, blocks while the human comments, and treats the resulting batch as the instruction. Activates on "ntb", "notabene", "review the diff", "review my changes", "review this branch", "review what's staged", "open the review", "collect the review".
 argument-hint: '[REV | REV REV] [--staged] [--context] [--launcher NAME]'
 allowed-tools: [Bash(ntb:*), Read, Edit, Write, Grep, Glob]
