@@ -58,6 +58,22 @@ ntb update         # move to the newest release
 ntb update --check # only report whether there is one
 ```
 
+Both also report the state of the **plugin**, which updates by its own path and
+so drifts from the CLI: if it is missing you get the two lines that add it, and
+if it is behind on a release that actually changed the skill, the lines that
+catch it up. When neither is true they say nothing about it — a version gap on
+its own is not worth a word, since every release bumps the plugin's version
+whether or not the skill moved.
+
+```
+/plugin marketplace update notabene
+/plugin update ntb@notabene
+```
+
+A plugin update applies only after Claude Code is **restarted** — that is Claude
+Code's rule, not ours, which is also why `ntb update` reports the plugin instead
+of updating it for you.
+
 Re-running `install.sh` does the same thing. Releases are git tags, so updating is
 git plus `npm ci` — no background checks, no telemetry, nothing to opt out of.
 Both refuse to touch a directory without the installer's `.managed-install`

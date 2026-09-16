@@ -63,13 +63,20 @@ export const pidSessionSource: SessionSource = {
 
 export const sessionSources: readonly SessionSource[] = [envSessionSource, pidSessionSource];
 
+/**
+ * Claude Code's state directory. Ours is keyed off it too (§3.2), and `ntb
+ * update` needs it without resolving a session at all — hence a function rather
+ * than an expression inlined into the context builder.
+ */
+export function claudeConfigDir(env: NodeJS.ProcessEnv = process.env): string {
+	return env["CLAUDE_CONFIG_DIR"] ?? join(homedir(), ".claude");
+}
+
 export function defaultSessionContext(
 	overrides: Partial<SessionContext> = {},
 ): SessionContext {
 	const env = overrides.env ?? process.env;
-	const claudeDir = overrides.claudeDir
-		?? env["CLAUDE_CONFIG_DIR"]
-		?? join(homedir(), ".claude");
+	const claudeDir = overrides.claudeDir ?? claudeConfigDir(env);
 	return {
 		env,
 		claudeDir,

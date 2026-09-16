@@ -43,6 +43,7 @@ src/
 ├── run.ts              the whole flow: session → root → changesets → launcher → collection
 ├── io.ts               output contract: emit() to stdout, log.* to stderr, EXIT, ReviewError
 ├── update.ts           `ntb update`: the installer's other half, git tags only (§7)
+├── plugin.ts           what Claude Code records about our plugin (§7.2)
 ├── time.ts             ISO-8601 with local offset
 ├── model/
 │   ├── diff.ts         Changeset / FileDiff / Hunk / HunkLine, ScopeId
@@ -499,6 +500,22 @@ on first use; neither is done.
 Two version fields live in the manifests, and both are wired into release-please
 `extra-files` (`$.version`, `$.plugins[0].version`). Without that they drift from
 `package.json` at the first release, which §7.1 promises they cannot.
+
+**The two halves update separately, so `ntb update` reports the other one** (D32).
+It reads Claude Code's own record, `<claudeDir>/plugins/installed_plugins.json`
+(`src/plugin.ts`), and prints the install lines when the plugin is absent, or the
+update lines — plus the restart, which is what a plugin update needs to apply —
+when the plugin is behind *and* this release changed the skill. Otherwise nothing.
+
+That second condition is the whole design. Since release-please bumps the
+manifests every release, the installed plugin is numerically behind after every
+one of them, while `skills/` changes rarely; a hint keyed on the version gap
+would fire every time and be learned as noise. Hence the gate is a diff of
+`.claude-plugin/skills` between `v<plugin version>` and `v<cli version>` — the
+manifests' own churn is outside that path by construction.
+
+`ntb update` cannot go further than reporting: the plugin is Claude Code's state,
+not ours, and applying a plugin update needs Claude Code restarted (D32).
 
 ## 8. Limitations
 

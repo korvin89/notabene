@@ -23,7 +23,7 @@ import type { LauncherName } from "./launcher/index.ts";
 import type { ScopeRequest } from "./diff/scopes.ts";
 import { dump, run } from "./run.ts";
 import type { RunMode, RunOptions } from "./run.ts";
-import { defaultSessionContext } from "./session/index.ts";
+import { claudeConfigDir, defaultSessionContext } from "./session/index.ts";
 import { update } from "./update.ts";
 
 const USAGE = `ntb — diff review for Claude Code: your comments on the agent's changes go back into its context as a batch.
@@ -203,9 +203,11 @@ async function main(argv: string[]): Promise<ExitCode> {
 	});
 
 	try {
-		// Maintenance: nothing to do with a review, so no session or repository
-		// is resolved on this path.
-		if (command === "update") return await update({ checkOnly: values.check === true });
+		// Maintenance: nothing to do with a review, so no session or repository is
+		// resolved on this path — only the state directory, to look up the plugin.
+		if (command === "update") {
+			return await update({ checkOnly: values.check === true, claudeDir: claudeConfigDir() });
+		}
 
 		const mode: RunMode = command === "open" ? "open" : command === "collect" ? "collect" : "auto";
 		const options: RunOptions = {

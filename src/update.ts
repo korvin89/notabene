@@ -20,6 +20,7 @@ import process from "node:process";
 import { promisify } from "node:util";
 import { EXIT, ReviewError, log } from "./io.ts";
 import type { ExitCode } from "./io.ts";
+import { compareVersions, installedPluginVersion } from "./plugin.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -77,6 +78,56 @@ async function currentTag(): Promise<string> {
 export interface UpdateOptions {
 	/** Only report whether a newer release exists; change nothing. */
 	readonly checkOnly: boolean;
+	/** Claude Code state directory — it holds the plugin's installation record (§7.2). */
+	readonly claudeDir: string;
+}
+
+/**
+ * Did this release change the skill — the only thing the plugin ships that the
+ * agent reads? A version gap on its own means nothing: release-please bumps the
+ * manifests on EVERY release (§7.1, `extra-files`), so `.claude-plugin/` always
+ * differs between two tags, and a hint that fires every time is a hint people
+ * learn to skip.
+ *
+ * Hence `skills/` and not the whole directory: a reworded manifest description
+ * changes what a marketplace listing says, not what the agent does.
+ *
+ * Unknown counts as changed: if a tag is missing or git refuses, a hint nobody
+ * needed is cheaper than silence about one they did.
+ */
+async function skillChangedBetween(from: string, to: string): Promise<boolean> {
+	try {
+		return (await git(["diff", "--name-only", from, to, "--", ".claude-plugin/skills"])) !== "";
+	} catch {
+		return true;
+	}
+}
+
+/**
+ * The other half of the install (§7.2). `ntb update` cannot update it — that is
+ * Claude Code's own state, and a plugin update needs a restart of Claude Code to
+ * apply, so there is no version of this that ends with the job done. Reporting
+ * is the honest ceiling, and the common case is silence: the versions match, or
+ * the release never touched the skill.
+ */
+async function reportPlugin(claudeDir: string, cliVersion: string): Promise<void> {
+	const installed = installedPluginVersion(claudeDir);
+	if (installed === null) {
+		log.info(
+			"the Claude Code plugin is not installed — `!ntb` works, but the agent cannot start a "
+				+ "review by itself. To add it, in Claude Code:",
+		);
+		log.info("  /plugin marketplace add korvin89/notabene");
+		log.info("  /plugin install ntb@notabene");
+		return;
+	}
+	if (compareVersions(installed, cliVersion) >= 0) return;
+	if (!(await skillChangedBetween(`v${installed}`, `v${cliVersion}`))) return;
+
+	log.info(`the plugin is at ${installed} and still ships that skill, while this CLI is ${cliVersion}.`);
+	log.info("  /plugin marketplace update notabene");
+	log.info("  /plugin update ntb@notabene");
+	log.info("then restart Claude Code — a plugin update only applies after a restart.");
 }
 
 export async function update(options: UpdateOptions): Promise<ExitCode> {
@@ -101,15 +152,19 @@ export async function update(options: UpdateOptions): Promise<ExitCode> {
 		return EXIT.ok;
 	}
 
+	// The plugin is reported against the CLI you HAVE, not the one on offer: until
+	// `ntb update` actually runs, a newer release says nothing about the drift.
 	const current = await currentTag();
 	if (current === latest) {
 		log.info(`already on the newest release (${latest}).`);
+		await reportPlugin(options.claudeDir, installedVersion());
 		return EXIT.ok;
 	}
 
 	if (options.checkOnly) {
 		log.info(`a newer release is available: ${latest} (installed: ${current === "" ? installedVersion() : current})`);
 		log.info("run `ntb update` to install it.");
+		await reportPlugin(options.claudeDir, installedVersion());
 		return EXIT.ok;
 	}
 
@@ -126,5 +181,6 @@ export async function update(options: UpdateOptions): Promise<ExitCode> {
 	});
 
 	log.info(`updated to ${latest} (ntb ${installedVersion()}).`);
+	await reportPlugin(options.claudeDir, installedVersion());
 	return EXIT.ok;
 }
