@@ -1,6 +1,6 @@
 # notabene
 
-Terminal diff review for Claude Code: `/ntb` right from the session opens what
+Terminal diff review for Claude Code: `/ntb:review` right from the session opens what
 the agent changed in the [hunk](https://hunk.dev) viewer — the working tree, the
 index, or everything since your branch left `main` — you leave inline comments,
 and the batch travels back into the agent's context, where it responds point by
@@ -33,7 +33,7 @@ it, then `sh install.sh`.
 
 ### The plugin
 
-The installer brings the CLI; `/ntb` comes from the Claude Code plugin, which is
+The installer brings the CLI; `/ntb:review` comes from the Claude Code plugin, which is
 a separate step:
 
 ```
@@ -46,7 +46,7 @@ plugin and drive everything with `!ntb` — but then a review that outlasts the
 wait needs you to write to the agent yourself, because a `!`-command cannot wake
 it (see "Two ways in" below).
 
-The first `/ntb` asks permission to run `ntb`; approve it once. In Claude Code's
+The first `/ntb:review` asks permission to run `ntb`; approve it once. In Claude Code's
 automatic permission mode the request may be refused outright by the classifier
 rather than shown to you — allow `Bash(ntb:*)` in your `settings.json` if that
 happens.
@@ -109,13 +109,13 @@ escape sequences in the terminal don't get it. Until the lines are there,
 
 ### Two ways in
 
-In a Claude Code session, either `/ntb` — the agent runs the review itself and
+In a Claude Code session, either `/ntb:review` — the agent runs the review itself and
 waits for you — or `!ntb`, where you run it and the output reaches the agent as
 part of your next message. Same viewer, same batch; they differ only in what
 happens when the review runs long, which it usually does. Past the caller's
 timeout Claude Code detaches the command without killing it, and then:
 
-- after `/ntb` the command belongs to the agent. Quitting the viewer wakes it
+- after `/ntb:review` the command belongs to the agent. Quitting the viewer wakes it
   through the task-completion notification and the batch is delivered with
   **nothing asked of you** (verified live, DECISIONS.md D29);
 - after `!ntb` the command belongs to you, and there is no agent turn to return
@@ -140,7 +140,7 @@ already written comments, and then the review is gone: no batch, no JSON copy.
 
 A run offers every scope that applies to your repository right now, and the
 viewer switches between them with `<` `>` `T` — no relaunch, which matters
-because with `/ntb` it is the agent that starts the review and you who decides
+because with `/ntb:review` it is the agent that starts the review and you who decides
 what to look at:
 
 | Scope | What it is | When it shows up |
@@ -234,9 +234,9 @@ everywhere:            --verbose       diagnostics to stderr
 ## MVP limitations
 
 - **A long review becomes asynchronous.** The detach ceiling is the caller's, not
-  ours: 120 s for `!ntb`, ten minutes for `/ntb` (the Bash tool's maximum). Past
+  ours: 120 s for `!ntb`, ten minutes for `/ntb:review` (the Bash tool's maximum). Past
   it the command is moved to the background but not killed — the viewer stays
-  open and the batch ends up in the task file. After `/ntb` the agent is woken by
+  open and the batch ends up in the task file. After `/ntb:review` the agent is woken by
   the completion notification and reads it; after `!ntb` nothing wakes it, so
   tell it you are done. If it still hasn't read the file, just ask: the batch and
   the path to the JSON copy are both in there (re-running `ntb collect` won't

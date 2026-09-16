@@ -247,7 +247,7 @@ async function runCollect(options: RunOptions): Promise<ExitCode> {
 	const pending = await store.loadPending();
 	if (pending === null) {
 		throw new ReviewError(
-			"nothing to collect: no unfinished review session found. Run `/ntb` or `ntb open` first.",
+			"nothing to collect: no unfinished review session found. Run `/ntb:review` or `ntb open` first.",
 		);
 	}
 	return finish(store, stateDir, pending, collectComments(stateDir), options.includeContext);
@@ -280,7 +280,7 @@ async function openPrepared(options: RunOptions): Promise<ExitCode | null> {
 		if (sessionError !== null) {
 			throw new ReviewError(
 				`no prepared review in ${cwd}, and the session could not be resolved. `
-					+ "Run `/ntb` in the Claude Code session first — then `ntb open` here.",
+					+ "Run `/ntb:review` in the Claude Code session first — then `ntb open` here.",
 			);
 		}
 		return null;

@@ -1,5 +1,6 @@
 {
   "name": "notabene",
+  "description": "notabene — terminal diff review for Claude Code",
   "owner": {
     "name": "Evgenii Alaev"
   },
@@ -7,7 +8,7 @@
     {
       "name": "ntb",
       "source": "./",
-      "description": "Terminal diff review for Claude Code: your comments on the agent's turn go back into its context as a batch",
+      "description": "Terminal diff review for Claude Code: your comments on the agent's changes go back into its context as a batch",
       "version": "0.3.0",
       "author": {
         "name": "Evgenii Alaev"

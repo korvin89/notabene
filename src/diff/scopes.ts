@@ -7,7 +7,7 @@
 //
 // One run builds every scope that applies and hands them all to the viewer, so
 // the human can switch without relaunching. That matters because of who starts
-// the review: with `/ntb` it is the agent, and command-line arguments are not the
+// the review: with `/ntb:review` it is the agent, and command-line arguments are not the
 // human's to pass (ARCHITECTURE.md §5.6).
 //
 // Everything is parsed into the src/model/diff.ts model by ./parse.ts. Outside a
