@@ -1,6 +1,6 @@
 {
   "name": "ntb",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Terminal diff review for Claude Code: your comments on the agent's changes go back into its context as a batch",
   "author": {
     "name": "Evgenii Alaev"
