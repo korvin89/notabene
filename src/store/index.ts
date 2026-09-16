@@ -10,7 +10,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ReviewError } from "../io.ts";
-import { projectSlug } from "../session/transcript.ts";
+import { projectSlug } from "../session/slug.ts";
 import type { CommentStore, ReviewDocument } from "../model/review.ts";
 
 /**

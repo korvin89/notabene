@@ -6,10 +6,8 @@ export type SessionOrigin = "env" | "pid";
 
 export interface SessionInfo {
 	sessionId: string;
-	/** working directory of the session; the transcript path is derived from it */
+	/** working directory of the session; the review root is derived from it (D14) */
 	cwd: string;
-	/** `~/.claude/projects/<slug>/<session-id>.jsonl`; null if the file does not exist */
-	transcriptPath: string | null;
 	/** pid of the `claude` process, if known (needed for diagnostics and flow A) */
 	claudePid: number | null;
 	/** which reliability level produced the result — visible in `dump session` */

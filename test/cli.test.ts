@@ -14,6 +14,14 @@ import { claudeFixture } from "./helpers.ts";
 
 const NTB = fileURLToPath(new URL("../ntb", import.meta.url));
 
+/** `git commit` refuses to run without one, and CI has no global gitconfig. */
+const GIT_IDENTITY = {
+	GIT_AUTHOR_NAME: "test",
+	GIT_AUTHOR_EMAIL: "test@example.invalid",
+	GIT_COMMITTER_NAME: "test",
+	GIT_COMMITTER_EMAIL: "test@example.invalid",
+};
+
 // ONE fake `~/.claude` for the whole file. Since D30 the review state lives
 // under it, so `ntb open` and `ntb collect` only find each other's work when
 // they share it — a fresh fixture per invocation would silently break flow C.
@@ -124,11 +132,21 @@ describe("usage errors", () => {
 		assert.match(result.stderr, /Usage:/);
 	});
 
-	test("an unknown command is refused, not guessed at", async () => {
-		const result = await cli(["bogus"]);
-		assert.equal(result.code, 2);
-		assert.equal(result.stdout, "");
-		assert.match(result.stderr, /unknown command: bogus/);
+	// Since D31 the first word may also be a revision (`ntb main`), so a word that
+	// is neither fails as a revision — and the list of commands rides along,
+	// because that is what a mistyped command looks like from here.
+	test("a first word that is neither a command nor a revision names both", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "notabene-cli-"));
+		try {
+			execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir, stdio: "ignore" });
+			const result = await cli(["bogus"], { env: sessionEnv(), cwd: dir });
+			assert.equal(result.code, 2);
+			assert.equal(result.stdout, "");
+			assert.match(result.stderr, /unknown revision: bogus/);
+			assert.match(result.stderr, /the commands are: review, open, collect/);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	// The commands replaced hand-written "these two cannot be combined" checks
@@ -149,7 +167,7 @@ describe("usage errors", () => {
 		assert.equal(missing.code, 2);
 		assert.match(missing.stderr, /dump expects a source/);
 
-		const extra = await cli(["dump", "current", "turns"]);
+		const extra = await cli(["dump", "scopes", "session"]);
 		assert.equal(extra.code, 2);
 		assert.match(extra.stderr, /one source/);
 	});
@@ -160,11 +178,15 @@ describe("usage errors", () => {
 		assert.equal(result.stdout, "");
 	});
 
-	test("--turn expects a turn number", async () => {
-		const result = await cli(["--turn", "late"]);
-		assert.equal(result.code, 2);
-		assert.equal(result.stdout, "");
-		assert.match(result.stderr, /--turn/);
+	test("--staged and a revision are mutually exclusive; three revisions are too many", async () => {
+		const both = await cli(["--staged", "main"]);
+		assert.equal(both.code, 2);
+		assert.equal(both.stdout, "");
+		assert.match(both.stderr, /--staged takes no revisions/);
+
+		const three = await cli(["a", "b", "c"]);
+		assert.equal(three.code, 2);
+		assert.match(three.stderr, /at most two revisions/);
 	});
 
 	test("--launcher expects a name from the chain", async () => {
@@ -194,7 +216,6 @@ describe("session resolution on a live run", () => {
 		assert.deepEqual(JSON.parse(result.stdout), {
 			sessionId: "session-from-env",
 			cwd: realpathSync(SANDBOX),
-			transcriptPath: null,
 			claudePid: null,
 			origin: "env",
 		});
@@ -247,14 +268,17 @@ describe("stdout stays empty while there is no batch", () => {
 		}
 	});
 
-	test("--turn 3 without a transcript: turns (T4) degrades to current, stdout empty", async () => {
+	test("--staged with an empty index: the refusal names the scope, stdout empty", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "notabene-cli-"));
 		try {
-			const result = await cli(["--turn", "T3"], { env: sessionEnv(), cwd: dir });
+			execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir, stdio: "ignore" });
+			writeFileSync(join(dir, "new.txt"), "line\n");
+			const result = await cli(["--staged"], { env: sessionEnv(), cwd: dir });
 			assert.equal(result.code, 0);
 			assert.equal(result.stdout, "");
-			assert.match(result.stderr, /per-turn diff unavailable/);
-			assert.match(result.stderr, /No changes/);
+			// the untracked file WOULD have made a working-tree review — an explicit
+			// scope is never silently swapped for another one
+			assert.match(result.stderr, /Nothing staged/);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -372,7 +396,7 @@ describe("flow C end to end, headless (T5 DoD: comments are available programmat
 			// Step 3: collection from the "session" — the batch to stdout, the JSON copy next to it
 			const collect = await cli(["collect"], { env: sessionEnv(), cwd: dir, detached: true });
 			assert.equal(collect.code, 0);
-			assert.match(collect.stdout, /Review of the current state diff, 1 comment\./);
+			assert.match(collect.stdout, /Review of the working tree diff, 1 comment\./);
 			assert.match(collect.stdout, /@new\.txt:2 \[question\]/);
 			assert.match(collect.stdout, /why the second line\?/);
 			// The copy is out of the tree, so the reference is absolute (D30).
@@ -599,31 +623,41 @@ describe("a failed viewer launch does not leave a session behind", () => {
 	});
 });
 
-describe("ntb dump turns on the fixture session (T4 DoD)", () => {
-	test("the list of turns with labels and diffs arrives as JSON in stdout", async () => {
-		const env = {
-			PATH: process.env["PATH"] ?? "",
-			CLAUDE_CODE_SESSION_ID: "d961755c-b183-4b29-b17d-ef95589d3e72",
-			CLAUDE_CONFIG_DIR: fileURLToPath(new URL("./fixtures/turns/main-claude", import.meta.url)),
-		};
-		const result = await cli(["dump", "turns"], { env, detached: true });
-		assert.equal(result.code, 0);
-		assert.equal(result.stderr, "");
+describe("ntb dump scopes", () => {
+	test("every scope on offer, with its label and diff, arrives as JSON in stdout", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "notabene-cli-"));
+		try {
+			const git = (...args: string[]): void => {
+				execFileSync("git", args, { cwd: dir, stdio: "ignore", env: { ...process.env, ...GIT_IDENTITY } });
+			};
+			git("init", "-q", "-b", "main");
+			writeFileSync(join(dir, "base.txt"), "base\n");
+			git("add", "-A");
+			git("commit", "-q", "-m", "base");
+			git("checkout", "-q", "-b", "feature");
+			writeFileSync(join(dir, "committed.txt"), "on the branch\n");
+			git("add", "-A");
+			git("commit", "-q", "-m", "branch work");
+			writeFileSync(join(dir, "dirty.txt"), "not committed\n");
 
-		const changesets = JSON.parse(result.stdout) as {
-			id: string;
-			label: string;
-			promptSnippet?: string;
-			files: { path: string; hunks: unknown[] }[];
-		}[];
-		assert.deepEqual(
-			changesets.map((changeset) => changeset.id),
-			["T14", "T13", "T12", "T11", "T10", "T9", "T6", "T4", "T2"],
-		);
-		for (const changeset of changesets) {
-			assert.ok(changeset.label.includes(changeset.promptSnippet ?? "???"));
-			assert.ok(changeset.files.length > 0);
-			for (const file of changeset.files) assert.ok(file.hunks.length > 0);
+			const result = await cli(["dump", "scopes"], { env: sessionEnv(), cwd: dir, detached: true });
+			assert.equal(result.code, 0);
+
+			const dumped = JSON.parse(result.stdout) as {
+				activeId: string;
+				changesets: { id: string; label: string; against: string; files: { path: string }[] }[];
+			};
+			assert.equal(dumped.activeId, "worktree");
+			assert.deepEqual(
+				dumped.changesets.map((changeset) => [changeset.id, changeset.label, changeset.against]),
+				[["worktree", "Working tree", "HEAD"], ["since", "Since main", "main"]],
+			);
+			assert.deepEqual(
+				dumped.changesets.map((changeset) => changeset.files.map((file) => file.path)),
+				[["dirty.txt"], ["committed.txt", "dirty.txt"]],
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 });

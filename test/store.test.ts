@@ -12,7 +12,7 @@ import { ReviewError } from "../src/io.ts";
 import { fileCommentStore, pendingPath, reviewStateDir } from "../src/store/index.ts";
 import { legacyStateDir, migrateLegacyState } from "../src/store/migrate.ts";
 import { captureStderr } from "./helpers.ts";
-import { reviewTurnFixture } from "./fixtures/review-turn.ts";
+import { reviewScopeFixture } from "./fixtures/review-scope.ts";
 
 function tempDir(prefix = "notabene-store-"): string {
 	return mkdtempSync(join(tmpdir(), prefix));
@@ -45,7 +45,7 @@ describe("pending document (flow C)", () => {
 	test("savePending → loadPending returns the same document", async () => {
 		const dir = tempDir();
 		const store = fileCommentStore(dir);
-		const doc = reviewTurnFixture();
+		const doc = reviewScopeFixture();
 
 		await store.savePending(doc);
 		assert.deepEqual(await store.loadPending(), doc);
@@ -57,7 +57,7 @@ describe("pending document (flow C)", () => {
 		const store = fileCommentStore(dir);
 
 		await store.clearPending(); // the file does not exist yet — not an error
-		await store.savePending(reviewTurnFixture());
+		await store.savePending(reviewScopeFixture());
 		await store.clearPending();
 		assert.equal(existsSync(pendingPath(dir)), false);
 		assert.equal(await store.loadPending(), null);
@@ -89,7 +89,7 @@ describe("pending document (flow C)", () => {
 describe("machine-readable copy (§3.2)", () => {
 	test("saveFinal writes valid JSON and returns an absolute path", async () => {
 		const dir = tempDir();
-		const doc = reviewTurnFixture();
+		const doc = reviewScopeFixture();
 
 		// Absolute since D30: relative to what used to be the repository root, the
 		// path stopped resolving once the copies left the tree.
@@ -104,8 +104,8 @@ describe("machine-readable copy (§3.2)", () => {
 	test("two reviews within one second do not overwrite each other", async () => {
 		const dir = tempDir();
 		const store = fileCommentStore(dir);
-		const first = reviewTurnFixture();
-		const second = { ...reviewTurnFixture(), comments: [] };
+		const first = reviewScopeFixture();
+		const second = { ...reviewScopeFixture(), comments: [] };
 
 		const firstPath = await store.saveFinal(first);
 		const secondPath = await store.saveFinal(second);

@@ -60,7 +60,7 @@ function parseType(body: string): { type: CommentType; body: string } {
 /** Up to three lines downward from the anchor (the line itself plus the next two) out of the side's full text — §3.1, behind a flag. */
 function contextLines(handoff: HunkHandoff | null, note: MirrorNote, side: "old" | "new", start: number): string[] {
 	if (handoff === null || note.file === null) return [];
-	// Search for the file starting from the open changeset: the user may have switched turns.
+	// Search for the file starting from the open changeset: the user may have switched scopes.
 	const ordered = [...handoff.changesets].sort((a, b) =>
 		(b.id === handoff.activeId ? 1 : 0) - (a.id === handoff.activeId ? 1 : 0),
 	);

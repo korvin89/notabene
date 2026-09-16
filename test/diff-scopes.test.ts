@@ -1,5 +1,7 @@
-// Tests of the "current" source (T3) on fixture git repositories: every test
-// does git init/commits in a temp directory itself, after() cleans up for everyone.
+// Tests of the scope builder (T3, ARCHITECTURE.md §4.2) on fixture git
+// repositories: every test does git init/commits in a temp directory itself,
+// after() cleans up for everyone. Patch-markup edge cases live next door, in
+// diff-parse.test.ts.
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -8,13 +10,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import process from "node:process";
 import { after, describe, test } from "node:test";
-import { currentChangesets, parseGitPatch } from "../src/diff/current.ts";
+import { buildScopes } from "../src/diff/scopes.ts";
+import type { ScopeOptions, ScopeRequest } from "../src/diff/scopes.ts";
 import { reviewStateDir } from "../src/store/index.ts";
-import type { DiffSourceOptions } from "../src/diff/index.ts";
-import type { Changeset, FileDiff } from "../src/model/diff.ts";
-import type { SessionInfo } from "../src/session/types.ts";
+import type { Changeset, FileDiff, ScopeId } from "../src/model/diff.ts";
 
-// The source inherits the process environment — detach it from the user's
+// The builder inherits the process environment — detach it from the user's
 // gitconfig so the tests do not depend on anybody's diff.* settings.
 process.env["GIT_CONFIG_GLOBAL"] = "/dev/null";
 process.env["GIT_CONFIG_SYSTEM"] = "/dev/null";
@@ -32,7 +33,7 @@ interface RepoFixture {
 	git(...args: string[]): void;
 	write(path: string, content: string | Buffer): void;
 	rm(path: string): void;
-	options(): DiffSourceOptions;
+	options(request?: ScopeRequest): ScopeOptions;
 }
 
 const cleanups: string[] = [];
@@ -45,13 +46,6 @@ function repo(init = true): RepoFixture {
 	// symlink, while `git rev-parse --show-toplevel` returns the resolved path.
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "notabene-t3-")));
 	cleanups.push(root);
-	const session: SessionInfo = {
-		sessionId: "t3-test",
-		cwd: root,
-		transcriptPath: null,
-		claudePid: null,
-		origin: "env",
-	};
 	const fixture: RepoFixture = {
 		root,
 		git(...args) {
@@ -64,7 +58,11 @@ function repo(init = true): RepoFixture {
 		rm(path) {
 			rmSync(join(root, path));
 		},
-		options: () => ({ cwd: root, session, claudeDir: join(root, "no-such-.claude") }),
+		options: (request) => ({
+			cwd: root,
+			claudeDir: join(root, "no-such-.claude"),
+			request: request ?? null,
+		}),
 	};
 	if (init) fixture.git("init", "-q", "-b", "main");
 	return fixture;
@@ -75,13 +73,19 @@ function commitAll(fixture: RepoFixture, message = "fixture"): void {
 	fixture.git("commit", "-q", "-m", message);
 }
 
-/** The single changeset from the answer + a check of its shape. */
-async function soleChangeset(fixture: RepoFixture): Promise<Changeset> {
-	const changesets = await currentChangesets(fixture.options());
-	assert.equal(changesets.length, 1);
-	const changeset = changesets[0] as Changeset;
-	assert.equal(changeset.id, "current");
-	assert.equal(changeset.mode, "current");
+/** The ids on offer, in display order — what the viewer's scope picker shows. */
+async function scopeIds(fixture: RepoFixture, request?: ScopeRequest): Promise<ScopeId[]> {
+	const { changesets } = await buildScopes(fixture.options(request));
+	return changesets.map((changeset) => changeset.id);
+}
+
+/** The working-tree changeset + a check of its shape. */
+async function worktreeChangeset(fixture: RepoFixture): Promise<Changeset> {
+	const { changesets, activeId } = await buildScopes(fixture.options());
+	assert.equal(activeId, "worktree");
+	const changeset = changesets.find((candidate) => candidate.id === "worktree") as Changeset;
+	assert.ok(changeset, "the working-tree scope is missing");
+	assert.equal(changeset.label, "Working tree");
 	assert.equal(changeset.root, fixture.root);
 	assert.notEqual(changeset.files.length, 0);
 	return changeset;
@@ -92,14 +96,14 @@ function soleFile(changeset: Changeset): FileDiff {
 	return changeset.files[0] as FileDiff;
 }
 
-describe("current: modified and new files", () => {
+describe("worktree: modified and new files", () => {
 	test("modified file: hunk, line numbering, oldText/newText", async () => {
 		const fixture = repo();
 		fixture.write("src/app.ts", "one\ntwo\nthree\n");
 		commitAll(fixture);
 		fixture.write("src/app.ts", "one\ntwo!\nthree\nfour\n");
 
-		const file = soleFile(await soleChangeset(fixture));
+		const file = soleFile(await worktreeChangeset(fixture));
 		assert.equal(file.path, "src/app.ts");
 		assert.equal(file.changeKind, "modified");
 		assert.equal(file.binary, false);
@@ -129,7 +133,7 @@ describe("current: modified and new files", () => {
 		fixture.write("notes.txt", "alpha\nbeta\n");
 
 		// README did not change — only the untracked file ends up in the changeset
-		const file = soleFile(await soleChangeset(fixture));
+		const file = soleFile(await worktreeChangeset(fixture));
 		assert.equal(file.path, "notes.txt");
 		assert.equal(file?.changeKind, "added");
 		assert.equal(file?.binary, false);
@@ -154,21 +158,21 @@ describe("current: modified and new files", () => {
 		fixture.write("first.txt", "line\n");
 		fixture.git("add", "-A");
 
-		const file = soleFile(await soleChangeset(fixture));
+		const file = soleFile(await worktreeChangeset(fixture));
 		assert.equal(file.changeKind, "added");
 		assert.equal(file.newText, "line\n");
 		assert.equal(file.hunks.length, 1);
 	});
 });
 
-describe("current: deletion and rename", () => {
+describe("worktree: deletion and rename", () => {
 	test("deleted file: oldText present, newText absent", async () => {
 		const fixture = repo();
 		fixture.write("gone.txt", "bye\n");
 		commitAll(fixture);
 		fixture.rm("gone.txt");
 
-		const file = soleFile(await soleChangeset(fixture));
+		const file = soleFile(await worktreeChangeset(fixture));
 		assert.equal(file.path, "gone.txt");
 		assert.equal(file.changeKind, "deleted");
 		assert.equal(file.oldText, "bye\n");
@@ -190,7 +194,7 @@ describe("current: deletion and rename", () => {
 		commitAll(fixture);
 		fixture.git("mv", "old-name.txt", "new-name.txt");
 
-		const file = soleFile(await soleChangeset(fixture));
+		const file = soleFile(await worktreeChangeset(fixture));
 		assert.equal(file.path, "new-name.txt");
 		assert.equal(file.changeKind, "renamed");
 		assert.equal(file.previousPath, "old-name.txt");
@@ -206,7 +210,7 @@ describe("current: deletion and rename", () => {
 		fixture.git("mv", "a.txt", "b.txt");
 		fixture.write("b.txt", "1\n2\n3\n4\n5\n6\n7\neight\n");
 
-		const file = soleFile(await soleChangeset(fixture));
+		const file = soleFile(await worktreeChangeset(fixture));
 		assert.equal(file.path, "b.txt");
 		assert.equal(file.changeKind, "renamed");
 		assert.equal(file.previousPath, "a.txt");
@@ -219,7 +223,7 @@ describe("current: deletion and rename", () => {
 	});
 });
 
-describe("current: binary and empty files", () => {
+describe("worktree: binary and empty files", () => {
 	test("binaries: modified (even with a space in the name) and untracked", async () => {
 		const fixture = repo();
 		fixture.write("bin/im age.bin", Buffer.from([0x00, 0x01, 0x02, 0xff]));
@@ -227,7 +231,7 @@ describe("current: binary and empty files", () => {
 		fixture.write("bin/im age.bin", Buffer.from([0x00, 0xaa, 0xbb]));
 		fixture.write("raw.bin", Buffer.from([0x7f, 0x00, 0x45, 0x4c, 0x46]));
 
-		const changeset = await soleChangeset(fixture);
+		const changeset = await worktreeChangeset(fixture);
 		assert.deepEqual(
 			changeset.files.map((file) => [file.path, file.changeKind, file.binary]),
 			[
@@ -248,7 +252,7 @@ describe("current: binary and empty files", () => {
 		commitAll(fixture);
 		fixture.write("empty.txt", "");
 
-		const changeset = await soleChangeset(fixture);
+		const changeset = await worktreeChangeset(fixture);
 		const file = changeset.files.find((entry) => entry.path === "empty.txt");
 		assert.equal(file?.changeKind, "added");
 		assert.equal(file?.binary, false);
@@ -262,7 +266,7 @@ describe("current: binary and empty files", () => {
 		commitAll(fixture);
 		fixture.write("wipe.txt", "");
 
-		const file = soleFile(await soleChangeset(fixture));
+		const file = soleFile(await worktreeChangeset(fixture));
 		assert.equal(file.changeKind, "modified");
 		assert.equal(file.oldText, "content\n");
 		assert.equal(file.newText, "");
@@ -270,7 +274,124 @@ describe("current: binary and empty files", () => {
 	});
 });
 
-describe("current: applicability boundaries", () => {
+describe("which scopes a run offers", () => {
+	test("on the base branch with an untouched index — the working tree alone", async () => {
+		const fixture = repo();
+		fixture.write("a.txt", "a\n");
+		commitAll(fixture);
+		fixture.write("a.txt", "a2\n");
+
+		assert.deepEqual(await scopeIds(fixture), ["worktree"]);
+	});
+
+	test("something staged — the staged scope joins in, and shows the index, not the disk", async () => {
+		const fixture = repo();
+		fixture.write("a.txt", "a\n");
+		commitAll(fixture);
+		fixture.write("a.txt", "staged\n");
+		fixture.git("add", "a.txt");
+		fixture.write("a.txt", "staged, then edited again\n");
+
+		const { changesets } = await buildScopes(fixture.options());
+		assert.deepEqual(changesets.map((changeset) => changeset.id), ["worktree", "staged"]);
+
+		const staged = changesets.find((changeset) => changeset.id === "staged") as Changeset;
+		assert.equal(staged.label, "Staged");
+		assert.equal(staged.against, "HEAD");
+		assert.equal(soleFile(staged).newText, "staged\n");
+		const worktree = changesets.find((changeset) => changeset.id === "worktree") as Changeset;
+		assert.equal(soleFile(worktree).newText, "staged, then edited again\n");
+	});
+
+	test("on a branch — `since <base>` joins in and covers commits plus the working tree", async () => {
+		const fixture = repo();
+		fixture.write("a.txt", "a\n");
+		commitAll(fixture);
+		fixture.git("checkout", "-q", "-b", "feature");
+		fixture.write("committed.txt", "one\n");
+		commitAll(fixture, "on the branch");
+		fixture.write("dirty.txt", "two\n");
+
+		const { changesets, activeId } = await buildScopes(fixture.options());
+		assert.equal(activeId, "worktree");
+		assert.deepEqual(changesets.map((changeset) => changeset.id), ["worktree", "since"]);
+
+		const since = changesets.find((changeset) => changeset.id === "since") as Changeset;
+		assert.equal(since.label, "Since main");
+		assert.equal(since.against, "main");
+		assert.deepEqual(since.files.map((file) => file.path), ["committed.txt", "dirty.txt"]);
+		// the working tree alone sees only what is not committed yet
+		const worktree = changesets.find((changeset) => changeset.id === "worktree") as Changeset;
+		assert.deepEqual(worktree.files.map((file) => file.path), ["dirty.txt"]);
+	});
+
+	test("a clean tree on a branch opens on `since` instead of saying \"No changes\"", async () => {
+		const fixture = repo();
+		fixture.write("a.txt", "a\n");
+		commitAll(fixture);
+		fixture.git("checkout", "-q", "-b", "feature");
+		fixture.write("b.txt", "b\n");
+		commitAll(fixture, "on the branch");
+
+		const { changesets, activeId } = await buildScopes(fixture.options());
+		assert.equal(activeId, "since");
+		assert.deepEqual(changesets.map((changeset) => changeset.id), ["since"]);
+	});
+
+	test("an explicit revision: one argument is `since`, two are a plain range", async () => {
+		const fixture = repo();
+		fixture.write("a.txt", "one\n");
+		commitAll(fixture, "first");
+		fixture.write("a.txt", "two\n");
+		commitAll(fixture, "second");
+		fixture.write("a.txt", "three\n");
+
+		const since = await buildScopes(fixture.options({ id: "since", ref: "HEAD~1" }));
+		assert.equal(since.activeId, "since");
+		const sinceSet = since.changesets.find((changeset) => changeset.id === "since") as Changeset;
+		assert.equal(sinceSet.label, "Since HEAD~1");
+		assert.equal(soleFile(sinceSet).oldText, "one\n");
+		assert.equal(soleFile(sinceSet).newText, "three\n");
+
+		const range = await buildScopes(fixture.options({ id: "range", base: "HEAD~1", head: "HEAD" }));
+		assert.equal(range.activeId, "range");
+		const rangeSet = range.changesets.find((changeset) => changeset.id === "range") as Changeset;
+		assert.equal(rangeSet.label, "HEAD~1..HEAD");
+		assert.equal(rangeSet.against, "HEAD~1..HEAD");
+		// a range is two revisions: the uncommitted "three" is none of its business
+		assert.equal(soleFile(rangeSet).newText, "two\n");
+	});
+
+	test("an unknown revision is a usage error, not an empty review", async () => {
+		const fixture = repo();
+		fixture.write("a.txt", "a\n");
+		commitAll(fixture);
+
+		await assert.rejects(
+			() => buildScopes(fixture.options({ id: "since", ref: "no-such-branch" })),
+			/unknown revision: no-such-branch/,
+		);
+		await assert.rejects(
+			() => buildScopes(fixture.options({ id: "range", base: "HEAD", head: "nope" })),
+			/unknown revision: nope/,
+		);
+	});
+
+	test("--staged with an untouched index: the scope is offered and stays empty", async () => {
+		const fixture = repo();
+		fixture.write("a.txt", "a\n");
+		commitAll(fixture);
+		fixture.write("a.txt", "a2\n");
+
+		const { changesets, activeId } = await buildScopes(fixture.options({ id: "staged" }));
+		// nothing is staged, so there is no staged changeset — and the run refuses to
+		// silently review the working tree instead (run.ts turns this into "Nothing staged")
+		assert.equal(activeId, null);
+		assert.deepEqual(changesets.map((changeset) => changeset.id), ["worktree"]);
+	});
+});
+
+describe("worktree: applicability boundaries", () => {
 	test("outside a git repository: a warning on stderr and an empty list", async () => {
 		const fixture = repo(false);
 		const captured: string[] = [];
@@ -279,13 +400,13 @@ describe("current: applicability boundaries", () => {
 			captured.push(String(chunk));
 			return true;
 		}) as typeof process.stderr.write;
-		let changesets;
+		let scopes;
 		try {
-			changesets = await currentChangesets(fixture.options());
+			scopes = await buildScopes(fixture.options());
 		} finally {
 			process.stderr.write = original;
 		}
-		assert.deepEqual(changesets, []);
+		assert.deepEqual(scopes, { changesets: [], activeId: null });
 		assert.match(captured.join(""), /is not a git repository/);
 	});
 
@@ -306,15 +427,15 @@ describe("current: applicability boundaries", () => {
 		fixture.write(join(state, "notes-2026-09-14T12-00-00.json"), "[]\n");
 		fixture.write("edit.txt", "visible\n");
 
-		const changesets = await currentChangesets(options);
+		const { changesets } = await buildScopes(options);
 		assert.deepEqual((changesets[0] as Changeset).files.map((file) => file.path), ["edit.txt"]);
 	});
 
-	test("clean working tree: an empty list, not an error", async () => {
+	test("clean working tree, nothing else on offer: no scopes, not an error", async () => {
 		const fixture = repo();
 		fixture.write("a.txt", "a\n");
 		commitAll(fixture);
-		assert.deepEqual(await currentChangesets(fixture.options()), []);
+		assert.deepEqual(await buildScopes(fixture.options()), { changesets: [], activeId: null });
 	});
 
 	test("files are sorted by path", async () => {
@@ -325,84 +446,10 @@ describe("current: applicability boundaries", () => {
 		fixture.write("z.txt", "z\n");
 		fixture.write("a.txt", "a\n");
 
-		const changeset = await soleChangeset(fixture);
+		const changeset = await worktreeChangeset(fixture);
 		assert.deepEqual(
 			changeset.files.map((file) => file.path),
 			["a.txt", "b.txt", "z.txt"],
 		);
-	});
-});
-
-describe("parseGitPatch: edge-case markup that is inconvenient to get from live git", () => {
-	test("quotes in a path (C-quoting) are removed", () => {
-		const patch = [
-			'diff --git "a/we\\"ird.txt" "b/we\\"ird.txt"',
-			"index 0000000..1111111 100644",
-			'--- "a/we\\"ird.txt"',
-			'+++ "b/we\\"ird.txt"',
-			"@@ -1 +1 @@",
-			"-old",
-			"+new",
-			"",
-		].join("\n");
-		const files = parseGitPatch(patch);
-		assert.equal(files.length, 1);
-		assert.equal(files[0]?.path, 'we"ird.txt');
-		assert.equal(files[0]?.hunks.length, 1);
-	});
-
-	test('a body line starting with "---" is not confused with a header', () => {
-		const patch = [
-			"diff --git a/doc.md b/doc.md",
-			"index 0000000..1111111 100644",
-			"--- a/doc.md",
-			"+++ b/doc.md",
-			"@@ -1,2 +1,3 @@",
-			" header",
-			"---- separator",
-			"+--- separator",
-			"+tail",
-			"",
-		].join("\n");
-		const file = parseGitPatch(patch)[0];
-		assert.deepEqual(file?.hunks[0]?.lines, [
-			{ kind: "context", oldLine: 1, newLine: 1, text: "header" },
-			{ kind: "del", oldLine: 2, newLine: null, text: "--- separator" },
-			{ kind: "add", oldLine: null, newLine: 2, text: "--- separator" },
-			{ kind: "add", oldLine: null, newLine: 3, text: "tail" },
-		]);
-	});
-
-	test('mode-only change with a space in the name: path from "diff --git"', () => {
-		const patch = [
-			"diff --git a/bin/run me.sh b/bin/run me.sh",
-			"old mode 100644",
-			"new mode 100755",
-			"",
-		].join("\n");
-		const file = parseGitPatch(patch)[0];
-		assert.equal(file?.path, "bin/run me.sh");
-		assert.equal(file?.changeKind, "modified");
-		assert.deepEqual(file?.hunks, []);
-	});
-
-	test('"\\ No newline at end of file" does not end up in hunk lines', () => {
-		const patch = [
-			"diff --git a/x b/x",
-			"index 0000000..1111111 100644",
-			"--- a/x",
-			"+++ b/x",
-			"@@ -1 +1 @@",
-			"-a",
-			"\\ No newline at end of file",
-			"+b",
-			"\\ No newline at end of file",
-			"",
-		].join("\n");
-		const file = parseGitPatch(patch)[0];
-		assert.deepEqual(file?.hunks[0]?.lines, [
-			{ kind: "del", oldLine: 1, newLine: null, text: "a" },
-			{ kind: "add", oldLine: null, newLine: 1, text: "b" },
-		]);
 	});
 });

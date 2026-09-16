@@ -14,11 +14,10 @@ import process from "node:process";
 import { ReviewError } from "../io.ts";
 import { ancestors, systemProcTable } from "./proc.ts";
 import { readRegistryEntry } from "./registry.ts";
-import { findTranscript } from "./transcript.ts";
 import type { SessionContext, SessionInfo, SessionSource } from "./types.ts";
 
 export type { SessionContext, SessionInfo, SessionSource } from "./types.ts";
-export { projectSlug } from "./transcript.ts";
+export { projectSlug } from "./slug.ts";
 
 function parsePid(value: string | undefined): number | null {
 	if (value === undefined) return null;
@@ -32,16 +31,16 @@ export const envSessionSource: SessionSource = {
 		const sessionId = ctx.env["CLAUDE_CODE_SESSION_ID"];
 		if (sessionId === undefined || sessionId === "") return null;
 
-		// Take cwd from the registry if it describes the same session: `review` may have
-		// been launched from a subdirectory (`!cd src && review`), while the transcript
-		// slug is computed from the root.
+		// Take cwd from the registry if it describes the same session: `ntb` may have
+		// been launched from a subdirectory (`!cd src && ntb`), while the review root
+		// is the repository top (D14).
 		const claudePid = parsePid(ctx.env["CLAUDE_PID"]);
 		const entry = claudePid === null ? null : readRegistryEntry(ctx.claudeDir, claudePid);
 		const cwd = entry !== null && entry.sessionId === sessionId && entry.cwd !== null
 			? entry.cwd
 			: ctx.cwd;
 
-		return { sessionId, cwd, transcriptPath: null, claudePid, origin: "env" };
+		return { sessionId, cwd, claudePid, origin: "env" };
 	},
 };
 
@@ -54,7 +53,6 @@ export const pidSessionSource: SessionSource = {
 			return {
 				sessionId: entry.sessionId,
 				cwd: entry.cwd ?? ctx.cwd,
-				transcriptPath: null,
 				claudePid: entry.pid,
 				origin: "pid",
 			};
@@ -81,15 +79,11 @@ export function defaultSessionContext(
 	};
 }
 
-/**
- * The first level that fires wins. The transcript is looked up once, here —
- * the sources do not need it, and T4 cannot run without it.
- */
+/** The first level that fires wins. */
 export function resolveSession(ctx: SessionContext = defaultSessionContext()): SessionInfo {
 	for (const source of sessionSources) {
 		const info = source.resolve(ctx);
-		if (info === null) continue;
-		return { ...info, transcriptPath: findTranscript(ctx.claudeDir, info.cwd, info.sessionId) };
+		if (info !== null) return info;
 	}
 	throw new ReviewError(
 		"could not determine the Claude Code session: CLAUDE_CODE_SESSION_ID is not set and "

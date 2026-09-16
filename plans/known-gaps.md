@@ -11,11 +11,8 @@ re-checked on 2026-09-14 after the rename and the distribution work.
 
 ## Behaviour
 
-- A clean working tree with a non-empty turn list says "No changes" instead of
-  hinting at `--turn N`.
 - The context line for an anchor at the end of a file produces an empty `>` in the
   batch.
-- `parseTurn("3abc")` returns 3 instead of refusing.
 - `note_changed` does not update a comment's body, so an edit made after the note
   was created can be missed.
 - `hunk` in the machine-readable copy is always `null` — the extension does not
@@ -31,7 +28,13 @@ re-checked on 2026-09-14 after the rename and the distribution work.
 
 ## Performance
 
-- `fillSideTexts` fetches file versions sequentially: 200 files take ~2.4 s.
+- `fillSideTexts` fetches file versions sequentially: 200 files take ~2.4 s. Since
+  D31 a run builds up to three scopes, so this is walked up to three times — the
+  per-run text cache spares the repeated blobs but not the first pass over each.
+- Nothing caps how big a scope may be. On a long-lived branch `since <base>` puts
+  the full text of both sides of every file it touches into `handoff.json`, which
+  the extension then reads whole. Left alone until a review is slow enough to
+  notice (D22).
 
 ## Robustness
 
@@ -44,14 +47,16 @@ re-checked on 2026-09-14 after the rename and the distribution work.
   purpose until it bites: the cheap fix is a version floor checked in the skill
   via `ntb --version`, not a migration — nothing durable is read back today
   (the final copies in the state directory are write-only).
-- `applyStructuredPatch` does not check hunk order.
+- A mistyped command (`ntb reviw`) is now read as a revision and fails with
+  "unknown revision" plus the list of commands. Honest, but a near-miss check
+  would be kinder.
 - Open questions never probed: how kitty polling tolerates a client failure,
   `a//abs/path` in the patch for files outside the review root, the `matched` field
   in the herdr `wait-output` response, EPIPE in `emit()`.
 
 ## Dead weight
 
-- Unused fields `BackupRef.version`, `ReplayEdit.order`, `SessionRegistryEntry.kind`.
+- Unused field `SessionRegistryEntry.kind`.
 - The `NotImplementedError` class and exit code 3 — unreachable, kept as scaffolding.
 
 ## Superseded since the review

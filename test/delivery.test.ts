@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
 import { STDOUT_LIMIT, formatReviewBatch } from "../src/delivery/index.ts";
 import type { ReviewComment, ReviewDocument } from "../src/model/review.ts";
-import { FIXTURE_JSON_PATH, reviewEmptyFixture, reviewTurnFixture } from "./fixtures/review-turn.ts";
+import type { ScopeId } from "../src/model/diff.ts";
+import { FIXTURE_JSON_PATH, reviewEmptyFixture, reviewScopeFixture } from "./fixtures/review-scope.ts";
 
 function snapshot(name: string): string {
 	return readFileSync(fileURLToPath(new URL(`fixtures/${name}`, import.meta.url)), "utf8");
@@ -30,36 +31,31 @@ function comment(overrides: Partial<ReviewComment>): ReviewComment {
 	};
 }
 
-function doc(comments: ReviewComment[], mode: "current" | "turn" = "turn"): ReviewDocument {
+function doc(comments: ReviewComment[], scope: ScopeId = "since", against = "main"): ReviewDocument {
 	return {
 		version: 1,
 		createdAt: "2026-09-13T20:15:31+03:00",
-		source: {
-			mode,
-			turn: mode === "turn" ? 3 : null,
-			sessionId: "s",
-			promptSnippet: mode === "turn" ? "snippet" : null,
-		},
+		source: { scope, against, sessionId: "s" },
 		comments,
 	};
 }
 
 describe("stdout batch: snapshots", () => {
 	test("fixture review without context — the §3.1 reference", () => {
-		const batch = formatReviewBatch(reviewTurnFixture(), {
+		const batch = formatReviewBatch(reviewScopeFixture(), {
 			jsonPath: FIXTURE_JSON_PATH,
 			includeContext: false,
 		});
-		assert.equal(batch.text, snapshot("stdout-turn.txt"));
+		assert.equal(batch.text, snapshot("stdout-scope.txt"));
 		assert.equal(batch.contextDropped, 0);
 	});
 
 	test("fixture review with context (--context)", () => {
-		const batch = formatReviewBatch(reviewTurnFixture(), {
+		const batch = formatReviewBatch(reviewScopeFixture(), {
 			jsonPath: FIXTURE_JSON_PATH,
 			includeContext: true,
 		});
-		assert.equal(batch.text, snapshot("stdout-turn-context.txt"));
+		assert.equal(batch.text, snapshot("stdout-scope-context.txt"));
 		assert.equal(batch.contextDropped, 0);
 	});
 });
@@ -87,13 +83,23 @@ describe("stdout batch: edge cases", () => {
 		assert.match(range.text, /@src\/a\.ts:17-19 \[change\] \(deleted lines, old:17-19\)/);
 	});
 
-	test("current mode: header without a turn, count stays grammatical", () => {
-		const batch = formatReviewBatch(doc([comment({})], "current"), {
-			jsonPath: null,
-			includeContext: false,
-		});
-		assert.match(batch.text, /^Review of the current state diff, 1 comment\.\n/);
-		assert.doesNotMatch(batch.text, /Machine-readable copy/);
+	test("every scope names itself in the header; the count stays grammatical", () => {
+		const header = (scope: ScopeId, against: string): string =>
+			formatReviewBatch(doc([comment({})], scope, against), { jsonPath: null, includeContext: false })
+				.text.split("\n")[0] ?? "";
+
+		assert.equal(header("worktree", "HEAD"), "Review of the working tree diff, 1 comment.");
+		assert.equal(header("staged", "HEAD"), "Review of the staged diff, 1 comment.");
+		assert.equal(header("since", "main"), "Review of the diff since main, 1 comment.");
+		assert.equal(header("range", "HEAD~3..HEAD"), "Review of the HEAD~3..HEAD diff, 1 comment.");
+	});
+
+	test("a pending document from before D31 has no scope — the header degrades, not crashes", () => {
+		const legacy = doc([comment({})]);
+		// what `ntb collect` reads back after an upgrade mid-review
+		legacy.source = { mode: "turn", turn: 3, sessionId: "s" } as unknown as ReviewDocument["source"];
+		const batch = formatReviewBatch(legacy, { jsonPath: null, includeContext: false });
+		assert.match(batch.text, /^Review of the diff, 1 comment\.\n/);
 	});
 
 	test("without jsonPath the \"Machine-readable copy\" tail is not printed", () => {

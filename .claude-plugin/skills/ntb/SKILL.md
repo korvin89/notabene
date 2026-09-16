@@ -1,7 +1,7 @@
 ---
 name: ntb
-description: Review the diff in the notabene hunk viewer and act on the comments that come back. Opens the changeset in a Herdr pane, a kitty tab, or by hand, blocks while the human comments, and treats the resulting batch as the instruction. Activates on "ntb", "notabene", "review the diff", "review my changes", "open the review", "review turn N", "collect the review".
-argument-hint: '[--turn N] [--context] [--launcher NAME]'
+description: Review the diff in the notabene hunk viewer and act on the comments that come back. Opens the changeset in a Herdr pane, a kitty tab, or by hand, blocks while the human comments, and treats the resulting batch as the instruction. Activates on "ntb", "notabene", "review the diff", "review my changes", "review this branch", "review what's staged", "open the review", "collect the review".
+argument-hint: '[REV | REV REV] [--staged] [--context] [--launcher NAME]'
 allowed-tools: [Bash(ntb:*), Read, Edit, Write, Grep, Glob]
 ---
 
@@ -19,6 +19,11 @@ Do **not** pass `run_in_background` — background handling is unreliable for
 interactive TUI launchers. Do not poll, and do not start other work while it
 runs: the human is reading the diff, and there is nothing to do until they quit
 the viewer.
+
+With no arguments the review opens on the working tree, and the human can switch
+scope inside the viewer — so pass an argument only when they asked for a specific
+comparison: `--staged` for the index, one revision (`ntb main`) for everything
+since the branch left it, two (`ntb HEAD~3 HEAD`) for a plain range.
 
 Two launches that end early, both on stderr:
 
@@ -55,7 +60,7 @@ followed by `[exited with code 0]`. Then act on it exactly as in step 2.
 
 ## 4. If the viewer wait timed out
 
-`ntb` stops waiting after its own `--timeout` (30 minutes by default) and exits
+`ntb` stops waiting after its own `--timeout` (4 hours by default) and exits
 with empty stdout, saying the viewer was left open. The comments are **not**
 lost: they are in the mirror on disk.
 

@@ -1,5 +1,5 @@
-// Our hunk extension (T5): per-turn changesets + comment mirror + turn
-// switching. Loaded by the viewer: `hunk diff --extension src/hunk-ext`.
+// Our hunk extension (T5): scope changesets + comment mirror + scope switching.
+// Loaded by the viewer: `hunk diff --extension src/hunk-ext`.
 //
 // The file is deliberately self-contained: the hunk loader executes it and our
 // modules are unavailable to it, so the handoff/notes schemas are duplicated
@@ -8,17 +8,19 @@
 // the hunkdiff version is pinned exactly in package.json.
 //
 // Four parts:
-// 1. VCS adapter: turn patches from the handoff file (path in the
-//    NOTABENE_HANDOFF env var), the turn label with a snippet — in `title`.
+// 1. VCS adapter: scope patches from the handoff file (path in the
+//    NOTABENE_HANDOFF env var), the scope label — in `title`.
 //    Mechanics verified in T1b.
 // 2. Comment mirror — schema verified by a live run of flow B
 //    (DECISIONS.md D19): path/sides/ranges from note_created/note_edited,
 //    set membership and deletions from note_changed, joined by id, flushed on
 //    shutdown (250 ms budget) — plus a write on every event so we don't depend
 //    on it.
-// 3. Turn switching: `<`/`>` — adjacent turn, `T` — pick from a list; the
+// 3. Scope switching: `<`/`>` — adjacent scope, `T` — pick from a list; the
 //    mechanism is `hunk session reload --repo … -- diff <id>` (verified in
-//    T1b); the new range comes back into load() of our own adapter.
+//    T1b); the new range comes back into load() of our own adapter. The three
+//    commands are registered only when there is more than one scope — an
+//    inert keybinding is worse than a missing one.
 // 4. Finishing: `C` — complete (the comments go to Claude, same as quitting),
 //    `x` — cancel, which asks for confirmation and writes the outcome marker
 //    the CLI reads (DECISIONS.md D28).
@@ -107,7 +109,9 @@ export default function claudeDiffExtension(hunk: HunkExtensionAPI): void {
 	 * hunk appends its own file and line counts after this and clips the end, so
 	 * the hint stays short.
 	 */
-	const KEYS_HINT = "[C] complete  [x] cancel";
+	const KEYS_HINT = ids.length > 1
+		? "[< >] scope  [C] complete  [x] cancel"
+		: "[C] complete  [x] cancel";
 
 	hunk.registerVcsAdapter({
 		id: "notabene",
@@ -121,9 +125,9 @@ export default function claudeDiffExtension(hunk: HunkExtensionAPI): void {
 					const wanted = input.range ?? activeId;
 					const changeset = handoff.changesets.find((candidate) => candidate.id === wanted);
 					if (changeset === undefined) {
-						throw userError(`notabene: there is no turn "${wanted}" in this review.`, [
+						throw userError(`notabene: there is no scope "${wanted}" in this review.`, [
 							`Available: ${ids.join(", ")}.`,
-							"Switching: < and > — adjacent turn, T — list.",
+							"Switching: < and > — adjacent scope, T — list.",
 						]);
 					}
 					activeId = changeset.id;
@@ -230,7 +234,7 @@ export default function claudeDiffExtension(hunk: HunkExtensionAPI): void {
 
 	hunk.on("shutdown", () => flush());
 
-	// ── 3. Turn switching ───────────────────────────────────────────────────
+	// ── 3. Scope switching ──────────────────────────────────────────────────
 
 	// `session reload --repo <path>` does NOT find the session with a VCS
 	// adapter: in the daemon registry repoRoot holds our sourceLabel, not the
@@ -265,13 +269,13 @@ export default function claudeDiffExtension(hunk: HunkExtensionAPI): void {
 	const reload = async (ctx: ExtensionCommandContext, targetId: string): Promise<void> => {
 		const sid = await resolveSid();
 		if (sid === null) {
-			ctx.notify("notabene: could not find my session in the hunk daemon — cannot switch turns", "error");
+			ctx.notify("notabene: could not find my session in the hunk daemon — cannot switch scopes", "error");
 			return;
 		}
 		await new Promise<void>((resolve) => {
 			execFile(handoff.hunkBin, ["session", "reload", sid, "--json", "--", "diff", targetId], (error) => {
 				if (error !== null) {
-					ctx.notify(`notabene: failed to switch turn: ${error.message}`, "error");
+					ctx.notify(`notabene: failed to switch scope: ${error.message}`, "error");
 				}
 				resolve();
 			});
@@ -281,23 +285,26 @@ export default function claudeDiffExtension(hunk: HunkExtensionAPI): void {
 	const step = (ctx: ExtensionCommandContext, delta: number): Promise<void> => {
 		const index = ids.indexOf(activeId) + delta;
 		if (index < 0 || index >= ids.length) {
-			ctx.notify(delta > 0 ? "notabene: this is the oldest turn" : "notabene: this is the newest turn");
+			ctx.notify(delta > 0 ? "notabene: this is the last scope" : "notabene: this is the first scope");
 			return Promise.resolve();
 		}
 		return reload(ctx, ids[index] as string);
 	};
 
-	// The list is sorted newest first (current, Tn, …, T1):
-	// `<` — toward newer, `>` — toward older. hunk's `,`/`.` are taken by files.
-	hunk.registerCommand({ id: "prevTurn", title: "Newer turn", key: "<" }, (ctx) => step(ctx, -1));
-	hunk.registerCommand({ id: "nextTurn", title: "Older turn", key: ">" }, (ctx) => step(ctx, 1));
-	hunk.registerCommand({ id: "pickTurn", title: "Pick a turn", key: "T" }, async (ctx) => {
-		const labels = handoff.changesets.map((changeset) => changeset.label);
-		const chosen = await ctx.dialogs.select({ title: "Which diff to show?", options: labels });
-		if (chosen === null) return;
-		const index = labels.indexOf(chosen);
-		if (index >= 0) await reload(ctx, ids[index] as string);
-	});
+	// A review of one scope has nothing to switch to, and hunk would happily bind
+	// three keys that only ever say "this is the last scope".
+	// hunk's `,`/`.` are taken by files, hence `<`/`>`.
+	if (ids.length > 1) {
+		hunk.registerCommand({ id: "prevScope", title: "Previous scope", key: "<" }, (ctx) => step(ctx, -1));
+		hunk.registerCommand({ id: "nextScope", title: "Next scope", key: ">" }, (ctx) => step(ctx, 1));
+		hunk.registerCommand({ id: "pickScope", title: "Pick a scope", key: "T" }, async (ctx) => {
+			const labels = handoff.changesets.map((changeset) => changeset.label);
+			const chosen = await ctx.dialogs.select({ title: "Which diff to show?", options: labels });
+			if (chosen === null) return;
+			const index = labels.indexOf(chosen);
+			if (index >= 0) await reload(ctx, ids[index] as string);
+		});
+	}
 
 	// ── 4. Finishing the review ─────────────────────────────────────────────
 

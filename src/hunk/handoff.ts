@@ -26,9 +26,9 @@ export interface HandoffFile {
 }
 
 export interface HandoffChangeset {
-	/** `current` | `T3` — also drives `hunk session reload -- diff <id>` */
+	/** scope id — also drives `hunk session reload -- diff <id>` (ARCHITECTURE.md §4.2) */
 	id: string;
-	/** title in hunk: `Turn T3 ("fix the balance…")` */
+	/** title in hunk: `Working tree`, `Since main` */
 	label: string;
 	patchText: string;
 	files: HandoffFile[];
@@ -88,8 +88,8 @@ function removeMirrors(dir: string): void {
  * The session is closed (the batch was delivered or there were no comments):
  * nobody needs the handoff and the mirror any more, and the handoff is the
  * heaviest file in the directory — it holds the full texts of both sides of
- * every changeset (hundreds of kilobytes per turn, megabytes with the turn
- * switcher). The machine-readable review copies stay — they are history.
+ * every changeset, and the scopes overlap (hundreds of kilobytes per scope).
+ * The machine-readable review copies stay — they are history.
  */
 export function clearHandoff(dir: string): void {
 	rmSync(handoffPath(dir), { force: true });

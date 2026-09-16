@@ -5,8 +5,8 @@
 // post-MVP (DECISIONS.md D21); the interface still fits a second implementation
 // if that decision is ever revisited.
 //
-// Batch format — §3.1: a header with the mode/turn and instructions for the
-// agent, items `@path:start-end [type]` with the comment body, WITHOUT retelling
+// Batch format — §3.1: a header naming the reviewed scope plus instructions for
+// the agent, items `@path:start-end [type]` with the comment body, WITHOUT retelling
 // the diff, and the path to the machine-readable copy at the tail. For the old
 // side the reference keeps the same line number as the anchor (delivery cannot
 // remap it to the nearest surviving line on the new side: per the T2 contract it
@@ -15,6 +15,7 @@
 // (`@src/balance.md:10 … (deleted line, old:10)`).
 
 import { emit, log } from "../io.ts";
+import { describeSource } from "../model/review.ts";
 import type { ReviewComment, ReviewDocument, ReviewSource } from "../model/review.ts";
 
 export interface DeliveryContext {
@@ -42,9 +43,6 @@ const MAX_CONTEXT_LINES = 3;
 /** Item body indent — aligned under the number, as in the §3.1 example. */
 const INDENT = "   ";
 
-/** The header stays a single line: the prompt snippet is guarded against walls of text. */
-const SNIPPET_MAX = 80;
-
 export interface FormattedBatch {
 	text: string;
 	/** how many items had their context trimmed by the limit (comments always survive) */
@@ -55,21 +53,9 @@ function countComments(count: number): string {
 	return count === 1 ? "1 comment" : `${count} comments`;
 }
 
-function flatSnippet(raw: string): string {
-	const flat = raw.replace(/\s+/g, " ").trim();
-	return flat.length <= SNIPPET_MAX ? flat : `${flat.slice(0, SNIPPET_MAX - 1)}…`;
-}
-
 function headerBlock(source: ReviewSource, count: number): string[] {
-	const subject = source.mode === "turn"
-		? `the turn T${source.turn ?? "?"} diff${
-			source.promptSnippet === null || source.promptSnippet === ""
-				? ""
-				: ` ("${flatSnippet(source.promptSnippet)}")`
-		}`
-		: "the current state diff";
 	return [
-		`Review of ${subject}, ${countComments(count)}.`,
+		`Review of ${describeSource(source)}, ${countComments(count)}.`,
 		"Address each item; make the edits, then briefly summarize: what you changed,",
 		"what you skipped and why. If an item is unclear, ask a clarifying question about it.",
 	];

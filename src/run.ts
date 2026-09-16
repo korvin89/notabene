@@ -1,7 +1,7 @@
 // The flow (ARCHITECTURE.md §1, §5):
 //
-//   !ntb → resolve the session → changesets (Current + T1..Tn) → handoff →
-//           → launcher → block → collect → batch to stdout + JSON copy
+//   !ntb → resolve the session → scopes (working tree, staged, since <base>) →
+//           → handoff → launcher → block → collect → batch to stdout + JSON copy
 //
 // Two directories travel together through this file and must not be confused:
 // `root` is the review root (the repository — patch paths and batch references
@@ -9,12 +9,10 @@
 // tree (D30).
 //
 // Changesets are written into the handoff file wholesale — the hunk extension
-// builds the turn switcher from it; the launcher only starts the viewer and waits.
+// builds the scope picker from it; the launcher only starts the viewer and waits.
 
-import { createDiffSource, currentDiffSource, gitToplevel, isDiffSourceName } from "./diff/index.ts";
-import type { DiffSourceName, DiffSourceOptions } from "./diff/index.ts";
-import { TurnsSchemaError } from "./diff/jsonl.ts";
-import { TurnsUnavailableError, buildTurnChangesets } from "./diff/turns.ts";
+import { buildScopes, gitToplevel } from "./diff/scopes.ts";
+import type { ScopeRequest } from "./diff/scopes.ts";
 import { stdoutDelivery } from "./delivery/index.ts";
 import { resolveHunkBinary } from "./hunk/bin.ts";
 import { clearHandoff, handoffPath, readHandoff, reviewCancelled, writeHandoff } from "./hunk/handoff.ts";
@@ -29,11 +27,10 @@ import {
 	selectLauncher,
 } from "./launcher/index.ts";
 import type { LauncherName } from "./launcher/index.ts";
-import type { Changeset } from "./model/diff.ts";
-import { newReviewDocument } from "./model/review.ts";
+import { describeSource, newReviewDocument } from "./model/review.ts";
 import type { CommentStore, ReviewComment, ReviewDocument } from "./model/review.ts";
 import { resolveSession } from "./session/index.ts";
-import type { SessionContext, SessionInfo } from "./session/types.ts";
+import type { SessionContext } from "./session/types.ts";
 import { fileCommentStore, reviewStateDir } from "./store/index.ts";
 import { migrateLegacyState } from "./store/migrate.ts";
 import { localIsoTimestamp } from "./time.ts";
@@ -48,8 +45,8 @@ export type RunMode =
 
 export interface RunOptions {
 	mode: RunMode;
-	/** turn number; null — the current state (`current`) */
-	turn: number | null;
+	/** scope asked for on the command line; null — let the run pick (§4.2) */
+	scope: ScopeRequest | null;
 	timeoutMs: number;
 	launcher: LauncherName | null;
 	includeContext: boolean;
@@ -66,10 +63,7 @@ export async function run(options: RunOptions): Promise<ExitCode> {
 	}
 
 	const session = resolveSession(options.ctx);
-	log.debug(
-		`session ${session.sessionId} (${session.origin}), cwd=${session.cwd}, `
-			+ `transcript=${session.transcriptPath ?? "not found"}`,
-	);
+	log.debug(`session ${session.sessionId} (${session.origin}), cwd=${session.cwd}`);
 
 	const root = await reviewRoot(session.cwd);
 	const stateDir = resolveStateDir(root, options.ctx.claudeDir);
@@ -84,10 +78,14 @@ export async function run(options: RunOptions): Promise<ExitCode> {
 			...(options.launcher !== null ? { force: options.launcher } : {}),
 		});
 
-	const changesets = await buildAllChangesets(session, root, options);
-	const changeset = changesets.length === 0 ? null : pickChangeset(changesets, options.turn);
+	const { changesets, activeId } = await buildScopes({
+		cwd: root,
+		claudeDir: options.ctx.claudeDir,
+		request: options.scope,
+	});
+	const changeset = changesets.find((candidate) => candidate.id === activeId) ?? null;
 	if (changeset === null) {
-		log.info("No changes — nothing to review.");
+		log.info(`${nothingToReview(options.scope)} — nothing to review.`);
 		return EXIT.ok;
 	}
 
@@ -192,11 +190,9 @@ function resolveStateDir(root: string, claudeDir: string): string {
 async function ensureNoPending(store: CommentStore): Promise<void> {
 	const pending = await store.loadPending();
 	if (pending === null) return;
-	const subject = pending.source.mode === "turn"
-		? `turn T${pending.source.turn ?? "?"}`
-		: "the current state";
 	throw new ReviewError(
-		`there is already an unfinished review of ${subject} (started ${pending.createdAt}) — the viewer `
+		`there is already an unfinished review of ${describeSource(pending.source)} `
+			+ `(started ${pending.createdAt}) — the viewer `
 			+ "may still be open in this window or in a parallel session. Run `ntb collect` first: it "
 			+ "will print that review's batch (or silently dismiss an empty session), then retry.",
 	);
@@ -290,11 +286,10 @@ async function openPrepared(options: RunOptions): Promise<ExitCode | null> {
 		return null;
 	}
 
-	if (options.turn !== null && pending.source.turn !== options.turn) {
-		const prepared = pending.source.turn === null ? "the current state" : `turn T${pending.source.turn}`;
+	if (options.scope !== null && pending.source.scope !== options.scope.id) {
 		log.warn(
-			`the review is already prepared for ${prepared} — ignoring --turn ${options.turn} `
-				+ `(to switch turns: !ntb --turn ${options.turn}).`,
+			`the review is already prepared for ${describeSource(pending.source)} — ignoring the requested scope `
+				+ "(switch it inside the viewer, or start over with `ntb collect` and a new run).",
 		);
 	}
 
@@ -322,60 +317,25 @@ async function resolveReviewRoot(options: RunOptions, consequence: string): Prom
 }
 
 /**
- * The full list for the turn switcher: Current + T1..Tn (ARCHITECTURE.md §4.3).
- * Turns are included only if the transcript was found and file-history is intact;
- * their absence is not an error but a narrowing of the switcher down to Current.
+ * Why the viewer is not opening — named after what was asked for, because "No
+ * changes" in answer to `ntb --staged` reads as a bug in the tool rather than as
+ * an empty index.
  */
-async function buildAllChangesets(
-	session: SessionInfo,
-	root: string,
-	options: RunOptions,
-): Promise<Changeset[]> {
-	const sourceOptions: DiffSourceOptions = {
-		cwd: root,
-		session,
-		claudeDir: options.ctx.claudeDir,
-	};
-	const current = await currentDiffSource(sourceOptions).changesets();
-
-	if (session.transcriptPath === null) {
-		const message = "per-turn diff unavailable: session transcript not found";
-		if (options.turn !== null) log.warn(`${message}.`);
-		else log.debug(message);
-		return current;
-	}
-	try {
-		return [...current, ...buildTurnChangesets(sourceOptions)];
-	} catch (error) {
-		if (error instanceof TurnsSchemaError || error instanceof TurnsUnavailableError) {
-			log.warn(`per-turn diff unavailable: ${error.message} — the switcher has only the current state.`);
-			return current;
-		}
-		throw error;
+function nothingToReview(request: ScopeRequest | null): string {
+	if (request === null) return "No changes";
+	switch (request.id) {
+		case "staged":
+			return "Nothing staged";
+		case "since":
+			return `No changes since ${request.ref}`;
+		case "range":
+			return `No changes between ${request.base} and ${request.head}`;
+		default:
+			return "No changes in the working tree";
 	}
 }
 
-/** null — nothing to review (a nonexistent turn stays an error for `--turn`). */
-function pickChangeset(changesets: Changeset[], turn: number | null): Changeset | null {
-	if (turn === null) {
-		// `!ntb` with no flags reviews Current; the turns ride along for the switcher.
-		return changesets.find((changeset) => changeset.mode === "current") ?? null;
-	}
-
-	const found = changesets.find((changeset) => changeset.turn === turn);
-	if (found !== undefined) return found;
-
-	const available = changesets
-		.filter((changeset) => changeset.turn !== undefined)
-		.map((changeset) => `T${changeset.turn}`)
-		.join(", ");
-	throw new ReviewError(
-		`turn T${turn} is not among those that changed files${available === "" ? "" : `; there are: ${available}`}`,
-		EXIT.usage,
-	);
-}
-
-/** `ntb dump <source>` — debugging; JSON to stdout is its result. */
+/** `ntb dump <what>` — debugging; JSON to stdout is its result. */
 export async function dump(what: string, options: RunOptions): Promise<ExitCode> {
 	if (what === "env") {
 		emit(JSON.stringify(detectEnvironment(options.ctx.env), null, 2));
@@ -385,20 +345,19 @@ export async function dump(what: string, options: RunOptions): Promise<ExitCode>
 		emit(JSON.stringify(resolveSession(options.ctx), null, 2));
 		return EXIT.ok;
 	}
-	if (!isDiffSourceName(what)) {
-		throw new ReviewError(
-			`unknown source for dump: ${what} (available: current, turns, session, env)`,
-			EXIT.usage,
-		);
+	if (what !== "scopes") {
+		throw new ReviewError(`unknown source for dump: ${what} (available: scopes, session, env)`, EXIT.usage);
 	}
 
-	const session = resolveSession(options.ctx);
-	const source = createDiffSource(what, {
-		cwd: await reviewRoot(session.cwd),
-		session,
-		claudeDir: options.ctx.claudeDir,
-	});
-	emit(JSON.stringify(await source.changesets(), null, 2));
+	emit(JSON.stringify(
+		await buildScopes({
+			cwd: await reviewRoot(resolveSession(options.ctx).cwd),
+			claudeDir: options.ctx.claudeDir,
+			request: options.scope,
+		}),
+		null,
+		2,
+	));
 	return EXIT.ok;
 }
 

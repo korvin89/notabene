@@ -7,15 +7,15 @@ import type { ReviewDocument } from "../../src/model/review.ts";
 /** The path printed at the tail of the reference batch — absolute since D30. */
 export const FIXTURE_JSON_PATH = "/Users/x/.claude/notabene/-Users-x-games-roguelike/2026-09-13T20-15-31.json";
 
-export function reviewTurnFixture(): ReviewDocument {
+/** The `since` scope: the header form that carries a revision name (§4.2). */
+export function reviewScopeFixture(): ReviewDocument {
 	return {
 		version: 1,
 		createdAt: "2026-09-13T20:15:31+03:00",
 		source: {
-			mode: "turn",
-			turn: 3,
+			scope: "since",
+			against: "main",
 			sessionId: "f5bf67f3-1234-4abc-8def-000000000001",
-			promptSnippet: "fix the dagger balance, knockback…",
 		},
 		comments: [
 			{
@@ -74,8 +74,8 @@ export function reviewTurnFixture(): ReviewDocument {
 	};
 }
 
-/** An empty review of the same turn: stdout must stay empty, no JSON is written. */
+/** An empty review of the same scope: stdout must stay empty, no JSON is written. */
 export function reviewEmptyFixture(): ReviewDocument {
-	const doc = reviewTurnFixture();
+	const doc = reviewScopeFixture();
 	return { ...doc, comments: [] };
 }
