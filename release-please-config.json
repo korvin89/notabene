@@ -17,6 +17,10 @@
           "type": "json",
           "path": ".claude-plugin/marketplace.json",
           "jsonpath": "$.plugins[0].version"
+        },
+        {
+          "type": "generic",
+          "path": ".claude-plugin/skills/review/SKILL.md"
         }
       ]
     }

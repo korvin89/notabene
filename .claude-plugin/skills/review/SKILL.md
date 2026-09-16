@@ -10,6 +10,10 @@ allowed-tools: [Bash(ntb:*), Read, Edit, Write, Grep, Glob]
 Run the review and act on what comes back. `ntb` is on `PATH` after
 `install.sh`; if it is missing, say so instead of guessing at a path.
 
+This skill ships with notabene 0.3.0 <!-- x-release-please-version --> and
+describes that CLI. The two install and update separately, so they can drift —
+§5 is what to do when they have.
+
 ## 1. Launch
 
 Run `ntb $ARGUMENTS` with the Bash tool: blocking, and with the bash timeout
@@ -67,3 +71,16 @@ lost: they are in the mirror on disk.
 Run `ntb collect` to deliver them. Do this when the human tells you they are
 done — collecting mid-review takes only the comments written so far and closes
 the session on the rest.
+
+## 5. If `ntb` rejects the arguments
+
+Exit code 2, with `unknown option` or `unknown revision` on stderr, means the CLI
+did not understand what this skill told you to pass. The likely cause is a CLI
+older than this skill: they update by separate paths (`ntb update` against
+`/plugin update`), so the plugin can run ahead.
+
+Run `ntb --version`. If it is below the version named at the top of this file,
+that is almost certainly it: tell the human to run `ntb update` in a terminal,
+and stop. Do not retry with different arguments, and do not fall back to a scope
+you guess the older CLI might accept — you would review something other than what
+was asked for, and silently.

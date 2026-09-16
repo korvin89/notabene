@@ -38,15 +38,14 @@ re-checked on 2026-09-14 after the rename and the distribution work.
 
 ## Robustness
 
-- Nothing checks that the plugin and the CLI are in step. They update by separate
-  paths (`/plugin update` against `ntb update`), and the skill keys off CLI
-  behaviour — its flags and the stderr phrases it branches on — so a one-sided
-  update makes the skill misinstruct the agent silently. There is no migration
-  machinery to hang a fix on either: `ntb update` is `git checkout` plus `npm ci`,
-  and artifact `version` fields are refusal gates, never upgrades. Deferred on
-  purpose until it bites: the cheap fix is a version floor checked in the skill
-  via `ntb --version`, not a migration — nothing durable is read back today
-  (the final copies in the state directory are write-only).
+- ~~Nothing checks that the plugin and the CLI are in step.~~ Closed from both
+  ends, 2026-09-16. `ntb update` reports a missing or stale plugin (D32), which
+  covers the CLI-ahead direction; the skill carries a release-please-maintained
+  version floor and checks it after a usage error (§7.2), which covers the
+  skill-ahead one. What is left is a hole neither end sees: a skill whose *prose*
+  changed without any CLI surface changing — no usage error fires, so nothing
+  detects it. Nothing to do about that short of the agent diffing its own
+  instructions, and it degrades to "slightly stale advice", not a failure.
 - A mistyped command (`ntb reviw`) is now read as a revision and fails with
   "unknown revision" plus the list of commands. Honest, but a near-miss check
   would be kinder.
