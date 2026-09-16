@@ -16,7 +16,7 @@ text lands in the agent's context. TypeScript, Node 22 with no build step, macOS
 | Post-MVP candidate directions and positioning | [plans/roadmap.md](plans/roadmap.md) |
 | Known defects we chose not to fix yet | [plans/known-gaps.md](plans/known-gaps.md) |
 | Batch and JSON-copy format | ARCHITECTURE.md §3 |
-| Claude Code formats (sessions, transcript, file-history) | ARCHITECTURE.md §4 |
+| Session resolution and the review scopes | ARCHITECTURE.md §4 |
 | The three launch flows and the kitty/herdr pitfalls | ARCHITECTURE.md §5 |
 | The two entry points and who owns the process | ARCHITECTURE.md §5.6 |
 | How it is installed and updated | ARCHITECTURE.md §7 |
@@ -30,8 +30,7 @@ Code map — ARCHITECTURE.md §2 (the `src/` tree with each file's purpose).
 ```sh
 npm test
 npm run typecheck        # tsc --noEmit
-./ntb dump current       # working-tree diff as JSON
-./ntb dump turns         # per-turn changesets
+./ntb dump scopes        # the scopes this run would offer, as JSON
 ./ntb dump session       # how the session was resolved
 ./ntb dump env           # what the launcher detection saw
 ./ntb update --check     # is there a newer release (managed installs only)

@@ -1,10 +1,10 @@
 # notabene
 
-Terminal diff review for Claude Code: `/ntb` right from the session opens the
-current turn's changes (or any previous turn's — labeled with snippets of your
-prompts) in the [hunk](https://hunk.dev) viewer, you leave inline comments, and
-the batch travels back into the agent's context — it responds point by point and
-makes the edits.
+Terminal diff review for Claude Code: `/ntb` right from the session opens what
+the agent changed in the [hunk](https://hunk.dev) viewer — the working tree, the
+index, or everything since your branch left `main` — you leave inline comments,
+and the batch travels back into the agent's context, where it responds point by
+point and makes the edits.
 
 How it works — [ARCHITECTURE.md](ARCHITECTURE.md), why it works this way — [DECISIONS.md](DECISIONS.md).
 
@@ -128,15 +128,41 @@ The rest depends on the environment: in kitty a tab with the diff opens, in
 Herdr — an adjacent pane. The pane deliberately stays open after the review: the
 next `!ntb` finds it by the name "notabene" and reloads it instead of
 spawning more splits (don't need it — close it by hand, the next run recreates
-it). In the viewer: `c` — comment, `<` / `>` / `T` — turn switching
-(Current / T1..Tn with prompt snippets), `C` — complete the review, `x` — cancel
-it, `q` — quit. The two finishing keys are repeated in the menu bar next to the
-turn's name, and all five sit in the `F10` menu under Extensions. Completing and quitting do the same thing: the batch is printed
-to stdout and lands in the context, and Claude responds to each item. Cancelling
-is the way out with nothing delivered — it asks first if you have already written
-comments, and then the review is gone: no batch, no JSON copy.
+it). In the viewer: `c` — comment, `<` / `>` / `T` — switch scope (see below),
+`C` — complete the review, `x` — cancel it, `q` — quit. The finishing keys are
+repeated in the menu bar next to the scope's name, and all of them sit in the
+`F10` menu under Extensions. Completing and quitting do the same thing: the batch
+is printed to stdout and lands in the context, and Claude responds to each item.
+Cancelling is the way out with nothing delivered — it asks first if you have
+already written comments, and then the review is gone: no batch, no JSON copy.
 
-Reviewing a specific turn: `!ntb --turn 3` (or `--turn T3`).
+### What gets reviewed
+
+A run offers every scope that applies to your repository right now, and the
+viewer switches between them with `<` `>` `T` — no relaunch, which matters
+because with `/ntb` it is the agent that starts the review and you who decides
+what to look at:
+
+| Scope | What it is | When it shows up |
+|---|---|---|
+| Working tree | `git diff HEAD` plus untracked files | always |
+| Staged | the index against `HEAD` | when something is staged |
+| Since `<base>` | from where your branch left the base branch up to the working tree — committed or not | on a branch with commits of its own |
+
+The base branch is whatever `origin/HEAD` names, falling back to `main` then
+`master`. The one that opens first is the working tree, or — on a clean tree —
+whatever else has changes, so committed branch work is never answered with
+"No changes".
+
+From the command line you can say which one opens first, and ask for a
+comparison that is not on offer by default:
+
+```sh
+!ntb                 # the working tree
+!ntb --staged        # the index
+!ntb main            # everything since this branch left main
+!ntb HEAD~3 HEAD     # two revisions, nothing uncommitted
+```
 
 Comment types — via a prefix in the body: `[q]` question, `[b]` blocker, no
 prefix (or `[c]`) — change; the full words `[question]` / `[blocker]` /
@@ -145,7 +171,7 @@ prefix (or `[c]`) — change; the full words `[question]` / `[blocker]` /
 Example batch (this is exactly what Claude receives):
 
 ```
-Review of the turn T3 diff ("fix the dagger balance, knockback…"), 2 comments.
+Review of the diff since main, 2 comments.
 Address each item; make the edits, then briefly summarize: what you changed,
 what you skipped and why. If an item is unclear, ask a clarifying question about it.
 
@@ -184,17 +210,18 @@ and back in the session:
 ### Commands and flags
 
 ```
-ntb [review]    review the current turn — the default, so `!ntb` is enough
+ntb [review]    review the changes — the default, so `!ntb` is enough
 ntb open        only prepare and open the viewer (step 1 of the "two steps")
 ntb collect     collect the opened viewer's comments (step 2)
 ntb update      update this install to the newest release
-ntb dump WHAT   debugging: current | turns | session | env
+ntb dump WHAT   debugging: scopes | session | env
 ```
 
 Flags belong to the command that uses them; anywhere else they are a usage error.
 
 ```
-review, open:          --turn N        the turn T<N> diff, not the current state
+review, open:          REV [REV]       the scope to open first (see "What gets reviewed")
+                       --staged        the index against HEAD
                        --launcher NAME herdr | kitty | manual — bypass detection
                        --timeout MIN   viewer wait time (default 240)
 review, open, collect: --context       add context lines to batch items
@@ -216,9 +243,9 @@ everywhere:            --verbose       diagnostics to stderr
   help, pending is already cleared). For `!ntb`, strict synchrony can be bought by
   raising `BASH_DEFAULT_TIMEOUT_MS` in the `env` of your `settings.json`, but that
   affects every `!`-command and the agent's Bash tool.
-- **Comments left after switching turns** (`<`/`>`/`T`) end up in the batch
-  under the original turn's header — the `file:line` anchor stays true to its
-  own turn, but the batch header doesn't change.
+- **Comments left after switching scope** (`<`/`>`/`T`) end up in the batch under
+  the scope the review opened on — the `file:line` anchor is its own, correct
+  one, but the batch header doesn't change.
 - **One review per repository at a time.** Review-session files are shared; a
   second run on top of an unfinished one gets a refusal with a hint — `ntb
   collect` first. The viewer wait is 4 hours by default, so a viewer opened and
@@ -233,8 +260,9 @@ everywhere:            --verbose       diagnostics to stderr
 - A batch longer than ~25k characters is not trimmed by comments — only context
   lines get cut; an extra-long batch may end up in the background-task file,
   Claude reads it from there.
-- The Claude Code JSONL/file-history format is officially internal: on schema
-  drift, per-turn degrades to Current with a warning.
+- **Scopes overlap, and the viewer gets the full text of both sides of every
+  file in each of them.** On a long-lived branch "Since main" can make the
+  hand-off file several megabytes; it is deleted as soon as the review ends.
 
 ## Development
 

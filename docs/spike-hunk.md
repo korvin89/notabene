@@ -78,6 +78,10 @@ The risk is retired.
 **Bonus — the turn switcher works too.** `input.range` from `hunk diff <ref>` makes it all the way to
 the adapter, and a live session can be switched from outside:
 
+> **Amendment (2026-09-16, D31):** per-turn review is gone, but this finding is not — the mechanism
+> was always generic over changesets and now drives the **scope** picker (working tree / staged /
+> since the base branch). Read `T2` below as any changeset id.
+
 ```bash
 hunk session reload <session-id> --source /tmp/hunk-spike/turnrepo --json -- diff T2
 # -> { "title": "Ход T2 («вынеси конфиг»)", "sourceLabel": "claude-diff: turn 2", ... }

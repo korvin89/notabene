@@ -66,9 +66,9 @@ function fakeHunk(): FakeHunk {
 function fixtureChangesets(root: string): Changeset[] {
 	return [
 		{
-			id: "current",
-			mode: "current",
-			label: "Current state",
+			id: "worktree",
+			label: "Working tree",
+			against: "HEAD",
 			root,
 			files: [
 				{
@@ -93,11 +93,9 @@ function fixtureChangesets(root: string): Changeset[] {
 			],
 		},
 		{
-			id: "T2",
-			mode: "turn",
-			label: "Turn T2 (\"fix the balance\")",
-			turn: 2,
-			promptSnippet: "fix the balance",
+			id: "since",
+			label: "Since main",
+			against: "main",
 			root,
 			files: [
 				{
@@ -138,7 +136,7 @@ describe("hunk extension against the handoff contract", () => {
 		process.env[HANDOFF_ENV] = writeHandoff(cwd, {
 			root: cwd,
 			changesets: fixtureChangesets(cwd),
-			activeId: "T2",
+			activeId: "since",
 			hunkBin: hunkStub,
 			stamp: "2026-09-14T12:00:00+03:00",
 		});
@@ -165,7 +163,7 @@ describe("hunk extension against the handoff contract", () => {
 		assert.match(fake.logs.join("\n"), /unknown schema/);
 	});
 
-	test("adapter: detect returns the root, load — the active turn and switching by range", async () => {
+	test("adapter: detect returns the root, load — the active scope and switching by range", async () => {
 		const fake = fakeHunk();
 		claudeDiffExtension(fake.api);
 		assert.ok(fake.adapter !== null);
@@ -178,21 +176,21 @@ describe("hunk extension against the handoff contract", () => {
 		// without range — activeId from the handoff. The title carries the key
 		// hint: hunk paints it in the menu bar, the one place always on screen.
 		const active = await load({ kind: "vcs", staged: false, options: {} }, {});
-		assert.equal(active["title"], "Turn T2 (\"fix the balance\")  [C] complete  [x] cancel");
-		assert.equal(active["sourceLabel"], "notabene: T2");
+		assert.equal(active["title"], "Since main  [< >] scope  [C] complete  [x] cancel");
+		assert.equal(active["sourceLabel"], "notabene: since");
 
 		// an explicit range switches
-		const current = await load({ kind: "vcs", range: "current", staged: false, options: {} }, {});
-		assert.equal(current["title"], "Current state  [C] complete  [x] cancel");
-		assert.match(String(current["patchText"]), /^diff --git a\/a\.txt b\/a\.txt\n/);
+		const worktree = await load({ kind: "vcs", range: "worktree", staged: false, options: {} }, {});
+		assert.equal(worktree["title"], "Working tree  [< >] scope  [C] complete  [x] cancel");
+		assert.match(String(worktree["patchText"]), /^diff --git a\/a\.txt b\/a\.txt\n/);
 
 		// readFileSource: both sides and a missing file
-		const read = current["readFileSource"] as (request: Record<string, unknown>) => Promise<string | null>;
+		const read = worktree["readFileSource"] as (request: Record<string, unknown>) => Promise<string | null>;
 		assert.equal(await read({ path: "a.txt", side: "old" }), "old line\n");
 		assert.equal(await read({ path: "a.txt", side: "new" }), "new line\n");
 		assert.equal(await read({ path: "missing.txt", side: "new" }), null);
 
-		// an unknown turn — a "for the user" error, structurally
+		// an unknown scope — a "for the user" error, structurally
 		await assert.rejects(
 			async () => load({ kind: "vcs", range: "T99", staged: false, options: {} }, {}),
 			(error: Error) => error.name === "HunkExtensionUserError" && /T99/.test(error.message),
@@ -315,36 +313,52 @@ describe("hunk extension against the handoff contract", () => {
 		);
 	});
 
-	test("turn switching: <(newer) and >(older) shell out to session reload, edges do not", async () => {
+	test("scope switching: < and > shell out to session reload, edges do not", async () => {
 		const fake = fakeHunk();
 		claudeDiffExtension(fake.api);
 		const notices: string[] = [];
 		const ctx = { notify: (message: string) => notices.push(message), dialogs: {} };
 
-		// activeId = T2 (index 1 of [current, T2]); "<" leads to current.
+		// activeId = since (index 1 of [worktree, since]); "<" leads to worktree.
 		// The session is found by pid via `session list` (--repo does not work with a VCS adapter).
-		await fake.commands.get("prevTurn")?.handler(ctx);
+		await fake.commands.get("prevScope")?.handler(ctx);
 		assert.match(readFileSync(stubLog, "utf8"), /session list --json/);
-		assert.match(readFileSync(stubLog, "utf8"), /session reload sid-test --json -- diff current/);
+		assert.match(readFileSync(stubLog, "utf8"), /session reload sid-test --json -- diff worktree/);
 
-		// ">" from T2 — the edge of the list: reload is not called, there is a hint
+		// ">" from the last scope — the edge of the list: reload is not called, there is a hint
 		rmSync(stubLog, { force: true });
-		await fake.commands.get("nextTurn")?.handler(ctx);
+		await fake.commands.get("nextScope")?.handler(ctx);
 		assert.equal(existsSync(stubLog), false);
-		assert.match(notices.join("\n"), /oldest/);
+		assert.match(notices.join("\n"), /last scope/);
 
 		// picking from the list by label
 		const pickCtx = {
 			notify: (message: string) => notices.push(message),
-			dialogs: { select: async () => "Current state" },
+			dialogs: { select: async () => "Working tree" },
 		};
-		await fake.commands.get("pickTurn")?.handler(pickCtx);
-		assert.match(readFileSync(stubLog, "utf8"), /-- diff current/);
+		await fake.commands.get("pickScope")?.handler(pickCtx);
+		assert.match(readFileSync(stubLog, "utf8"), /-- diff worktree/);
 
 		// the keys do not clash with hunk's built-ins (`,`/`.` are taken by files)
-		assert.equal(fake.commands.get("prevTurn")?.key, "<");
-		assert.equal(fake.commands.get("nextTurn")?.key, ">");
-		assert.equal(fake.commands.get("pickTurn")?.key, "T");
+		assert.equal(fake.commands.get("prevScope")?.key, "<");
+		assert.equal(fake.commands.get("nextScope")?.key, ">");
+		assert.equal(fake.commands.get("pickScope")?.key, "T");
+	});
+
+	test("a single-scope review registers no switching keys at all", () => {
+		process.env[HANDOFF_ENV] = writeHandoff(cwd, {
+			root: cwd,
+			changesets: [fixtureChangesets(cwd)[0] as Changeset],
+			activeId: "worktree",
+			hunkBin: hunkStub,
+			stamp: "2026-09-14T12:00:00+03:00",
+		});
+		const fake = fakeHunk();
+		claudeDiffExtension(fake.api);
+
+		assert.equal(fake.commands.get("prevScope"), undefined);
+		assert.equal(fake.commands.get("pickScope"), undefined);
+		assert.ok(fake.commands.has("completeReview"), "finishing keys stay");
 	});
 
 	test("finishing: C completes, x cancels after a confirmation, a stale marker does not carry over", async () => {

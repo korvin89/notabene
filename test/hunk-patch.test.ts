@@ -115,10 +115,9 @@ describe("buildFilePatch — git-style unified patch from the model", () => {
 describe("buildPatchText", () => {
 	test("changeset patch — concatenation of per-file patches in model order", () => {
 		const changeset: Changeset = {
-			id: "T1",
-			mode: "turn",
-			label: "Turn T1 (\"test\")",
-			turn: 1,
+			id: "since",
+			label: "Since main",
+			against: "main",
 			root: "/tmp",
 			files: [modified, { path: "empty.txt", changeKind: "added", binary: false, hunks: [] }],
 		};

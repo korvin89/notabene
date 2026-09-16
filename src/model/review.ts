@@ -5,7 +5,7 @@
 // `resolvedBy`) are present from day one, even while the UI does not fill them —
 // a spec requirement.
 
-import type { Changeset, ChangesetMode, Side } from "./diff.ts";
+import type { Changeset, ScopeId, Side } from "./diff.ts";
 
 /** The MVP UI has no types (hunk does not have them) — encoded via a prefix, the field exists already. */
 export type CommentType = "question" | "change" | "blocker";
@@ -31,11 +31,33 @@ export interface ReviewComment {
 }
 
 export interface ReviewSource {
-	mode: ChangesetMode;
-	/** turn number, or null for `current` */
-	turn: number | null;
+	/** which comparison was reviewed (ARCHITECTURE.md §4.2) */
+	scope: ScopeId;
+	/** what it was compared against, as the user named it: `HEAD`, `main`, `HEAD~3..HEAD` */
+	against: string | null;
 	sessionId: string;
-	promptSnippet: string | null;
+}
+
+/**
+ * The scope in words — the subject of the batch header (§3.1) and of the
+ * "there is already an unfinished review of …" refusal, so the two cannot drift.
+ *
+ * The fallback arm is not dead code: a pending document is read back by whatever
+ * version runs `collect`, and one written before D31 carries no `scope` at all.
+ */
+export function describeSource(source: ReviewSource): string {
+	switch (source.scope) {
+		case "worktree":
+			return "the working tree diff";
+		case "staged":
+			return "the staged diff";
+		case "since":
+			return source.against === null ? "the diff since the base branch" : `the diff since ${source.against}`;
+		case "range":
+			return source.against === null ? "the diff" : `the ${source.against} diff`;
+		default:
+			return "the diff";
+	}
 }
 
 export interface ReviewDocument {
@@ -51,8 +73,8 @@ export interface ReviewDocument {
  *
  * Two states, because flow C (ARCHITECTURE.md §5.4) is split in time:
  * `ntb open` writes the pending document (what is being reviewed),
- * `ntb collect` reads it back — otherwise neither the turn nor the prompt
- * snippet would be known at collection time.
+ * `ntb collect` reads it back — otherwise the scope would not be known at
+ * collection time, and the batch header would have nothing to name.
  */
 export interface CommentStore {
 	/** the review state directory — `<claudeDir>/notabene/<slug>/`, outside the tree (D30) */
@@ -74,10 +96,9 @@ export function newReviewDocument(
 		version: 1,
 		createdAt,
 		source: {
-			mode: changeset.mode,
-			turn: changeset.turn ?? null,
+			scope: changeset.id,
+			against: changeset.against,
 			sessionId,
-			promptSnippet: changeset.promptSnippet ?? null,
 		},
 		comments: [],
 	};

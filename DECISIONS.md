@@ -122,7 +122,7 @@ a separate window instead of a tab and a second application instance. A trap for
 future: `open -W` won't do for waiting — it waits for the whole application to quit.
 
 ### D7. Per-turn diff is built from file-history, not by replaying edits
-2026-09-13 · in effect
+2026-09-13 · revoked by D31 (per-turn review is gone entirely)
 
 **Why.** The JSONL has a ready-made file-history mechanism: snapshots at turn
 boundaries and full copies of file versions. This is more robust than replay: it
@@ -616,3 +616,47 @@ removes the directory (`store/migrate.ts`). It carries the in-flight review too:
 a viewer opened before the upgrade would otherwise hold comments that `collect`
 answers "nothing to collect" to. Files we do not recognise are left alone and
 keep the directory alive — the move is ours to make, the user's files are not.
+
+### D31. Per-turn review is removed; the review is scoped by git instead
+2026-09-16 · in effect · revokes D7
+
+The turn switcher goes: `diff/turns.ts`, `diff/jsonl.ts`, `diff/text-diff.ts`,
+the transcript locator, `--turn`, `dump turns`, and `ChangesetMode` with its
+`turn`/`promptSnippet` fields. In their place a review is scoped the way every
+other diff tool scopes one — working tree, index, since the branch point, or a
+plain revision range (ARCHITECTURE.md §4.2) — and the viewer's `<`/`>`/`T` now
+switch between those.
+
+**Why.** A year of daily use by the one user who has it, and the keys were never
+pressed once. That alone would only argue for demotion; what argues for removal
+is that per-turn review was actively wrong in two ways. A comment on turn T3
+anchors to a `file:line` in *that turn's* new side, and the batch tells the agent
+to act on it now — if a later turn moved the code, the reference points at
+something unrelated. And the need behind "review turn by turn" is incremental
+review ("what is new since I last looked"), which a single turn's diff does not
+answer; it answers "what did that one prompt do", an archaeology question, not a
+review one.
+
+**What it was costing.** ~700 lines of source plus 225 of tests, and — the real
+price — every line of our contact with Claude Code's undocumented file-history
+and transcript formats (the old §4.3). Removing it means the diff no longer
+depends on Claude Code at all: the session now yields an id and a cwd, nothing
+more. That also unblocks the host-agent seam in the roadmap, which was stuck on
+"other agents have no file-history equivalent".
+
+**Why the scope list, and not one scope per invocation.** Because of D29: with
+`/ntb` the agent starts the review, so the human is not there to pass arguments.
+The run therefore builds every scope that applies and lets the viewer switch;
+the command line only chooses which one opens first. The switching mechanism
+survived the turn removal unchanged — it was always generic over changesets.
+
+**What is deliberately not kept.** No `--turn` alias, no compatibility arm in
+the diff, no rotation of the old ids. The one backward-looking concession is in
+`describeSource()`: a pending document written before this change carries
+`mode`/`turn` instead of `scope`, and `collect` after an upgrade must still be
+able to name what it is delivering, so an unknown scope degrades to "the diff".
+
+**The header changed, which is an agent-facing contract** (§3.1): "Review of the
+turn T3 diff (…)" becomes "Review of the working tree diff" / "the diff since
+main" / "the staged diff" / "the A..B diff". Snapshot fixtures moved in the same
+commit.

@@ -164,6 +164,12 @@ wrapper returning the comments to the agent" has already been walked by someone 
 their code in T5, but it is no competitor to the spec (no source from Claude Code history, no launch
 via `!`).
 
+> **Amendment (2026-09-16, D31):** "no per-turn source" stopped being a difference — we removed
+> per-turn review ourselves, having never used it. Two of the reasons for rejecting tuicr above lean
+> on it ("not suitable for per-turn", and the comparison with pi-tuicr). The verdict below stands on
+> the others, which are the load-bearing ones: no extension API, no patch from stdin, hard-wired diff
+> sources.
+
 ## Verdict on tuicr
 
 | Question | Verdict |

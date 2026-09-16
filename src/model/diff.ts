@@ -1,9 +1,8 @@
 // Diff model: Changeset / FileDiff / Hunk (ARCHITECTURE.md §2).
 //
-// This is an internal representation, independent of the source (git or
-// file-history) and of the viewer. T3/T4 populate it, T5 turns it into a unified
-// patch for hunk's VCS adapter (`patchText` + `readFileSource`), T6 takes context
-// lines from it.
+// This is an internal representation, independent of git and of the viewer. T3
+// populates it, T5 turns it into a unified patch for hunk's VCS adapter
+// (`patchText` + `readFileSource`), T6 takes context lines from it.
 
 /** Side of the diff: before the edit or after. A comment can hang on either. */
 export type Side = "old" | "new";
@@ -50,31 +49,26 @@ export interface FileDiff {
 	newText?: string;
 }
 
-/** What the switcher shows: the current state or a specific turn. */
-export type ChangesetMode = "current" | "turn";
+/**
+ * Which git comparison a changeset shows (ARCHITECTURE.md §4.2). Doubles as the
+ * changeset id: a review holds at most one changeset of each kind, and the id is
+ * what `hunk session reload -- diff <id>` switches by.
+ */
+export type ScopeId = "worktree" | "staged" | "since" | "range";
+
+export const SCOPE_IDS: readonly ScopeId[] = ["worktree", "staged", "since", "range"];
 
 export interface Changeset {
-	/** stable identifier: `current` or `T3` (also drives `session reload -- diff T3`) */
-	id: string;
-	mode: ChangesetMode;
-	/** label for the UI and the batch header: `Turn T3 ("tweak the dagger balance…")` */
+	id: ScopeId;
+	/** label for the UI and the scope picker: `Working tree`, `Since main` */
 	label: string;
-	/** turn number for mode === "turn" */
-	turn?: number;
-	/** snippet of the user's prompt of this turn (ARCHITECTURE.md §4.3) */
-	promptSnippet?: string;
+	/**
+	 * What the changeset is compared against, named the way the user named it
+	 * (`HEAD`, `main`, `HEAD~3..HEAD`) — it reaches the batch header and the
+	 * machine-readable copy. null outside a repository with commits.
+	 */
+	against: string | null;
 	/** root against which `FileDiff.path` values are given */
 	root: string;
 	files: FileDiff[];
-}
-
-export interface DiffSource {
-	/** `current` | `turns` — appears in `ntb dump <source>` */
-	readonly name: string;
-	/**
-	 * List of changesets in display order. For `current` it always has one
-	 * element, for `turns` — the turns that actually changed files
-	 * (ARCHITECTURE.md §4.3). An empty list is a valid answer (nothing to review).
-	 */
-	changesets(): Promise<Changeset[]>;
 }

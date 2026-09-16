@@ -14,7 +14,7 @@ Why it is this way — [DECISIONS.md](DECISIONS.md). How to use it — [README.m
 /ntb  (the plugin skill; the agent runs `ntb` blocking, §5.6)
   → session resolve (env → pid chain)
   → review root = git repository root
-  → changesets: Current + T1..Tn (this is also the turn switcher)
+  → changesets: every scope that applies (§4.2) — this is also the scope picker
   → handoff file + viewer launch (launcher)
   → block until the viewer closes
   → read the comment mirror → batch to stdout + JSON copy
@@ -45,20 +45,17 @@ src/
 ├── update.ts           `ntb update`: the installer's other half, git tags only (§7)
 ├── time.ts             ISO-8601 with local offset
 ├── model/
-│   ├── diff.ts         Changeset / FileDiff / Hunk / HunkLine, DiffSource interface
-│   └── review.ts       ReviewDocument / ReviewComment (§3.2), CommentStore interface
+│   ├── diff.ts         Changeset / FileDiff / Hunk / HunkLine, ScopeId
+│   └── review.ts       ReviewDocument / ReviewComment (§3.2), CommentStore, describeSource()
 ├── session/            SessionSource: env → pid chain → registry (§4.1)
-│   ├── index.ts        source chain + transcript lookup
+│   ├── index.ts        source chain
 │   ├── registry.ts     ~/.claude/sessions/<pid>.json
-│   ├── transcript.ts   ~/.claude/projects/<slug>/<session-id>.jsonl
+│   ├── slug.ts         Claude Code's project slug — the state directory borrows it
 │   ├── proc.ts         walking process ancestors (ps)
 │   └── types.ts        SessionInfo / SessionContext / SessionSource
-├── diff/               DiffSource: changesets() → Changeset[]
-│   ├── current.ts      git diff HEAD + untracked; unified-patch parsing; gitToplevel()
-│   ├── turns.ts        per-turn from file-history (§4.3), replay fallback, degradation
-│   ├── jsonl.ts        transcript parser: turns, snapshots, deltas, replay material
-│   ├── text-diff.ts    own LCS diff (no dependencies), hunks with 3 context lines
-│   └── index.ts        source names, options, assembly
+├── diff/               the scopes a run offers (§4.2)
+│   ├── scopes.ts       planning and building them; git plumbing; gitToplevel()
+│   └── parse.ts        unified-patch parser (pure)
 ├── launcher/           Launcher: open() / waitForDone() / collect()
 │   ├── detect.ts       environment detection via env (no process spawning)
 │   ├── herdr.ts        flow A: Herdr pane
@@ -71,7 +68,7 @@ src/
 │   ├── notes.ts        mirror → ReviewComment; types from prefixes; context lines
 │   ├── patch.ts        model → unified patch for the VCS adapter
 │   └── bin.ts          resolving the platform hunk binary, the extension directory, the ntb wrapper
-├── hunk-ext/index.ts   hunk extension: VCS adapter, mirror, turn switching
+├── hunk-ext/index.ts   hunk extension: VCS adapter, mirror, scope switching
 ├── store/
 │   ├── index.ts        CommentStore: state directory, pending cycle, machine-readable copies
 │   └── migrate.ts      one-time move of a pre-D30 `<repo>/.claude/reviews/`
@@ -83,7 +80,6 @@ Abstractions and their implementations:
 | Interface | Declared in | Implementations |
 |---|---|---|
 | `SessionSource` | `session/types.ts` | env, pid chain |
-| `DiffSource` | `model/diff.ts` | `current`, `turns` |
 | `Launcher` | `launcher/types.ts` | `herdr`, `kitty`, `manual` |
 | `CommentStore` | `model/review.ts` | `fileCommentStore` (files in the state directory, §3.2) |
 | `Delivery` | `delivery/index.ts` | `stdout` |
@@ -96,7 +92,7 @@ The only thing the happy path writes to stdout. `@path:start-end` references
 and comment text, no diff retelling:
 
 ```
-Review of the turn T3 diff ("fix the dagger balance, knockback…"), 2 comments.
+Review of the diff since main, 2 comments.
 Address each item; make the edits, then briefly summarize: what you changed,
 what you skipped and why. If an item is unclear, ask a clarifying question about it.
 
@@ -109,6 +105,9 @@ what you skipped and why. If an item is unclear, ask a clarifying question about
 Machine-readable copy: /Users/x/.claude/notabene/-Users-x-games-roguelike/2026-09-13T20-15-31.json
 ```
 
+- The header names the reviewed scope (§4.2) — `describeSource()` in
+  `model/review.ts` is the one place that spells it, shared with the "there is
+  already an unfinished review of …" refusal so the two cannot drift.
 - Paths are relative to the repository root (§5.5), same order as in the mirror.
   The copy at the tail is the exception: it lives outside the tree (§3.2), so
   its path is absolute.
@@ -157,7 +156,7 @@ collision — suffix `-2`, `-3`):
 {
   "version": 1,
   "createdAt": "2026-09-13T20:15:31+03:00",
-  "source": { "mode": "turn", "turn": 3, "sessionId": "f5bf67f3-…", "promptSnippet": "fix the dagger balance…" },
+  "source": { "scope": "since", "against": "main", "sessionId": "f5bf67f3-…" },
   "comments": [
     {
       "id": "user:1789327445165-1", "file": "src/weapons.ts", "side": "new",
@@ -171,7 +170,11 @@ collision — suffix `-2`, `-3`):
 
 `type`, `status`, `resolvedBy` have lived in the schema from day one, even if
 the UI doesn't fill them. `hunk` is always `null` — the extension doesn't
-mirror the hunk index.
+mirror the hunk index. `source.scope` is one of the §4.2 ids and `against` is the
+revision as the user named it; before D31 the same slot held `mode`/`turn`/
+`promptSnippet`, which is why `describeSource()` still has a fallback arm — the
+pending document of a review started under the old version is read back by the
+new one.
 
 The copies are not history for its own sake and nothing reads them back: they
 are the fallback for a batch that never reached the agent (stdout swallowed, the
@@ -185,7 +188,9 @@ An internal CLI ↔ extension contract, both files in the state directory (§3.2
 - **`handoff.json`** is written by the CLI before launching the viewer: `root`,
   `notesPath`, `hunkBin`, `activeId` and all changesets (label, unified patch,
   full texts of both sides for `readFileSource`). The path travels to the
-  viewer via the `NOTABENE_HANDOFF` env var.
+  viewer via the `NOTABENE_HANDOFF` env var. It is the heaviest file we write:
+  the scopes overlap, so a file changed on a branch has its text in the handoff
+  once per scope that contains it.
 - **`notes-<createdAt>.json`** (name truncated like the §3.2 copy) is written
   by the extension: one write per note event, via a temp file and `rename`. The
   name is unique per review so that a viewer left open doesn't clobber the next
@@ -195,8 +200,9 @@ An internal CLI ↔ extension contract, both files in the state directory (§3.2
   absence is the normal case — quitting the viewer any other way delivers the
   comments (D28). The name is derived from the mirror's so that one cleanup
   pattern covers both.
-- `pending.json` links `open` and `collect`: without it, the collection
-  step knows neither the turn nor the prompt snippet.
+- `pending.json` links `open` and `collect`: without it, the collection step
+  would not know which scope was reviewed, and the batch header would have
+  nothing to name.
 
 The extension (`src/hunk-ext/index.ts`) is **self-contained**: the hunk loader
 executes it, our modules are unavailable to it, so the schemas are duplicated
@@ -226,13 +232,13 @@ The single exception outside `EXIT` is the sh wrapper `ntb`: without
 `node` in `PATH` it exits with 127 (the shell "command not found" convention),
 the TS code is never reached.
 
-## 4. Claude Code data
-
-Everything in this section is **Claude Code's internal format**, not officially
-documented. Hence the degradation requirement: an unfamiliar schema doesn't
-break the review but narrows it to Current with a warning.
+## 4. Inputs
 
 ### 4.1. Session resolution
+
+`~/.claude/sessions/<pid>.json` is **Claude Code's internal format**, not
+officially documented — an unfamiliar schema must narrow what we can do, never
+break the run.
 
 1. **env**: `CLAUDE_CODE_SESSION_ID` reaches both the Bash tool and the
    `!`-command. `CLAUDE_PID` — the pid of the `claude` process.
@@ -241,42 +247,50 @@ break the review but narrows it to Current with a warning.
    Correctly distinguishes parallel sessions in one repository — each has its
    own pid.
 
-`cwd` is taken from the registry if it refers to the same session: `review` may
+`cwd` is taken from the registry if it refers to the same session: `ntb` may
 have been started from a subdirectory. The ancestor walk is depth-limited and
 cycle-protected.
 
-### 4.2. Transcript
+The session gives two things and no more: the id that goes into the review
+document, and the cwd the review root is derived from. Nothing in the diff
+depends on Claude Code any longer (D31) — the session's transcript and
+file-history are not read at all.
 
-`~/.claude/projects/<slug>/<session-id>.jsonl`, where the slug is the project
-path with everything non-alphanumeric replaced by a dash. If the slug doesn't
-match — a directory scan. One session = one id = one transcript = one
-file-history directory.
+### 4.2. Review scopes
 
-Turn boundaries are user records (`type: "user"`, not `isMeta`, not
-`isSidechain`, content not `tool_result`); the same records provide the prompt
-snippets for the labels. Service wrappers (`<command-name>`, `<bash-input>`, …)
-are collapsed into a readable form.
+A scope is one git comparison. A run builds every scope that applies and hands
+them all to the viewer, which switches between them with `<`/`>`/`T`; the
+command line only picks which one opens first. The reason the list exists rather
+than a single scope per invocation: with `/ntb` the *agent* starts the review
+(§5.6), so the human never passes the arguments.
 
-### 4.3. file-history (per-turn diff)
+| id | Comparison | Untracked | Offered when |
+|---|---|---|---|
+| `worktree` | `git diff HEAD` | yes | always |
+| `staged` | `git diff --cached HEAD` | no | `git diff --cached` is non-empty, or `--staged` was asked for |
+| `since` | `git diff $(git merge-base <ref> HEAD)` | yes | on a branch ahead of its base, or a revision was given |
+| `range` | `git diff <a> <b>` | no | two revisions were given |
 
-- `file-history-snapshot` is written when a user message is sent;
-  `messageId` == this record's `uuid` — that is the turn boundary.
-- `snapshot.trackedFileBackups` is a **cumulative** set of tracked files
-  (`<hash>@vN`), not the turn's changes. "What turn N touched" = comparing
-  adjacent snapshots by `backupFileName`. Counting by set size is a mistake.
-- The versions themselves are full file copies in `~/.claude/file-history/<session-id>/`.
-- The "before" state of a file first tracked mid-turn is not in the snapshot
-  but in the `@v1` backup of its `file-history-delta` (the backup is written
-  before the first edit; `null` — the file didn't exist).
-- For the last snapshot, "after" is taken from disk, and only inside the review root.
-- The hash in `backupFileName` is not path-stable across versions.
-- Fallback when a backup is lost: replaying `toolUseResult.structuredPatch` /
-  `originalFile` / `content` from Edit/Write records.
-- Turn numbering can diverge from the built-in `/diff` (service turns, snapshot
-  gaps) — hence the prompt snippet always in the label.
+Details that are decisions, not incidentals:
 
-The turn switcher = Current + the turns whose comparison yielded a non-empty
-result, newest first.
+- **`since` is the merge base, not the ref.** A plain `git diff main` also
+  reverses whatever `main` gained since the branch point; the merge base gives
+  "what this branch added", which is what the question means.
+- Its right-hand side is the **working tree**, not HEAD: in an agent session the
+  interesting work is usually not committed yet.
+- The base branch is `origin/HEAD` if git records it, else `main`, else
+  `master`; a local branch of that name wins over the remote ref, because that
+  is the name the human thinks in.
+- A scope with no files is dropped. If it was asked for explicitly it is not
+  silently swapped for another one — the run says "Nothing staged" and exits 0.
+- Without a request the run opens the first non-empty of worktree → since →
+  staged, so committed branch work with a clean tree opens on `since` instead
+  of being answered "No changes".
+- `<ref>` resolving to HEAD itself makes `since` identical to the working tree,
+  so it is dropped as a duplicate.
+- Both sides' full texts are read for `readFileSource`, through one per-run
+  cache: the scopes overlap heavily and without it the same blob is fetched
+  once per scope.
 
 ## 5. Launch model
 
@@ -391,7 +405,7 @@ Must not be broken; most have a guard.
 | Tests that run `./ntb` must set `cwd` | shared temp directory by default in `test/cli.test.ts` |
 | Empty review → empty stdout | e2e in `test/cli.test.ts` |
 | Nothing of ours is written into the reviewed repository | `tree()` assertions in `test/cli.test.ts` |
-| Unfamiliar file-history schema → degradation to Current with a warning | `test/diff-turns.test.ts` |
+| An explicitly requested scope is never silently swapped for another one | `test/diff-scopes.test.ts`, `test/cli.test.ts` |
 
 ## 7. Distribution
 
@@ -491,12 +505,12 @@ Two version fields live in the manifests, and both are wired into release-please
 - A long review becomes asynchronous (§5.5); after `!ntb` the batch then waits
   for the user to write to the agent, because nothing wakes it (§5.6).
 - `/ntb` needs both the CLI and the plugin installed (§7.2).
-- Comments left after switching turns inside the viewer end up in the batch
-  under the original turn's header; their `file:line` anchor is their own,
+- Comments left after switching scope inside the viewer end up in the batch
+  under the scope the review opened on; their `file:line` anchor is their own,
   correct one.
 - No "file viewed" marks — hunk doesn't have them.
-- The turn switcher lives only within a session: new session = new id = empty
-  file-history, numbering starts over.
+- The handoff carries the full text of both sides of every file in every scope,
+  and the scopes overlap: a long-lived branch makes it several megabytes.
 - Batch references are relative to the repository root; with a session in a
   subdirectory they have to be read relative to the root.
 - macOS: the paths to kitty and to the platform hunk binary assume the macOS

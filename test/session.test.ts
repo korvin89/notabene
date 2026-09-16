@@ -3,7 +3,7 @@ import { describe, test } from "node:test";
 import { ReviewError } from "../src/io.ts";
 import { envSessionSource, pidSessionSource, resolveSession } from "../src/session/index.ts";
 import { ancestors } from "../src/session/proc.ts";
-import { projectSlug } from "../src/session/transcript.ts";
+import { projectSlug } from "../src/session/slug.ts";
 import type { SessionContext } from "../src/session/types.ts";
 import { claudeFixture, fakeProcTable } from "./helpers.ts";
 
@@ -27,13 +27,7 @@ describe("session source: env level", () => {
 			context({ claudeDir: fixture.claudeDir, env: { CLAUDE_CODE_SESSION_ID: SID } }),
 		);
 
-		assert.deepEqual(info, {
-			sessionId: SID,
-			cwd: PROJECT,
-			transcriptPath: null,
-			claudePid: null,
-			origin: "env",
-		});
+		assert.deepEqual(info, { sessionId: SID, cwd: PROJECT, claudePid: null, origin: "env" });
 	});
 
 	test("without the variable yields to the next level", () => {
@@ -153,37 +147,6 @@ describe("resolveSession: the chain and the transcript", () => {
 
 		assert.equal(info.sessionId, SID);
 		assert.equal(info.origin, "env");
-	});
-
-	test("the transcript is found via the project slug", () => {
-		const fixture = claudeFixture();
-		const path = fixture.transcript(PROJECT, SID);
-
-		const info = resolveSession(
-			context({ claudeDir: fixture.claudeDir, env: { CLAUDE_CODE_SESSION_ID: SID } }),
-		);
-
-		assert.equal(info.transcriptPath, path);
-	});
-
-	test("the transcript is found by scanning when the slug does not match", () => {
-		const fixture = claudeFixture();
-		const path = fixture.transcript("/a/totally/different/path", SID);
-
-		const info = resolveSession(
-			context({ claudeDir: fixture.claudeDir, env: { CLAUDE_CODE_SESSION_ID: SID } }),
-		);
-
-		assert.equal(info.transcriptPath, path);
-	});
-
-	test("no transcript is not an error, just null (T4 degrades to current)", () => {
-		const fixture = claudeFixture();
-		const info = resolveSession(
-			context({ claudeDir: fixture.claudeDir, env: { CLAUDE_CODE_SESSION_ID: SID } }),
-		);
-
-		assert.equal(info.transcriptPath, null);
 	});
 
 	test("nothing to determine the session with — a clear error", () => {

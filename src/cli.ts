@@ -20,27 +20,34 @@ import { EXIT, ReviewError, emit, log, setVerbose } from "./io.ts";
 import type { ExitCode } from "./io.ts";
 import { DEFAULT_TIMEOUT_MS, LAUNCHER_CHAIN } from "./launcher/index.ts";
 import type { LauncherName } from "./launcher/index.ts";
+import type { ScopeRequest } from "./diff/scopes.ts";
 import { dump, run } from "./run.ts";
 import type { RunMode, RunOptions } from "./run.ts";
 import { defaultSessionContext } from "./session/index.ts";
 import { update } from "./update.ts";
 
-const USAGE = `ntb — diff review for Claude Code: your comments on the agent's turn go back into its context as a batch.
+const USAGE = `ntb — diff review for Claude Code: your comments on the agent's changes go back into its context as a batch.
 
 Usage:
-  ntb [review] [--turn N] [--launcher NAME] [--timeout MIN] [--context]
+  ntb [review] [REV | REV REV] [--staged] [--launcher NAME] [--timeout MIN] [--context]
                         show the diff in the viewer, wait, and print the batch
-  ntb open [--turn N] [--launcher NAME] [--timeout MIN] [--context]
+  ntb open [REV | REV REV] [--staged] [--launcher NAME] [--timeout MIN] [--context]
                         only prepare the review and open the viewer (flow C, step 1)
   ntb collect [--context]
                         pick up comments from the open viewer (flow C, step 2)
   ntb update [--check]  update this install to the newest release
-  ntb dump WHAT         debugging: current | turns | session | env — JSON to stdout
+  ntb dump WHAT [REV…]  debugging: scopes | session | env — JSON to stdout
+
+Scope — what to review. Every scope that applies is offered in the viewer
+(\`<\` \`>\` \`T\` switch between them); an argument only says which one opens first:
+  ntb                   the working tree against HEAD, untracked files included
+  ntb --staged          the index against HEAD
+  ntb main              everything since this branch left main, committed or not
+  ntb HEAD~3 HEAD       two revisions, nothing uncommitted
 
 Review flags:
-  --turn N              review turn T<N> instead of the current state
   --launcher NAME       ${LAUNCHER_CHAIN.join(" | ")} — bypass environment detection
-  --timeout MIN         how long to wait for the viewer, default 30
+  --timeout MIN         how long to wait for the viewer, default 240
   --context             add context lines to the batch items
 
 Everywhere:
@@ -62,7 +69,7 @@ const EVERYWHERE = {
 
 /** Modifiers of a review: what to show and where. */
 const REVIEW_FLAGS = {
-	turn: { type: "string" },
+	staged: { type: "boolean" },
 	launcher: { type: "string" },
 	timeout: { type: "string" },
 	context: { type: "boolean" },
@@ -78,22 +85,26 @@ const OPTIONS: Record<Command, ParseArgsConfig["options"]> = {
 	// No launcher, no timeout: collection waits for nothing (ARCHITECTURE.md §5.4).
 	collect: { ...EVERYWHERE, context: { type: "boolean" } },
 	update: { ...EVERYWHERE, check: { type: "boolean" } },
-	dump: { ...EVERYWHERE },
+	// `dump scopes` answers "what would a review show", so it takes a scope too —
+	// but none of the flags about where to show it.
+	dump: { ...EVERYWHERE, staged: { type: "boolean" } },
 	help: { ...EVERYWHERE },
 };
 
 /**
- * The command is the first argument. A leading flag means the default command,
- * so `ntb --turn 3` keeps working; an unknown word is refused rather than
- * guessed at, which is what keeps `ntb review main feature` available later.
+ * The command is the first argument. Anything else — a flag or a revision —
+ * means the default command, so both `ntb --staged` and `ntb main` work.
+ *
+ * A word that is neither a command nor a revision therefore fails later, as
+ * "unknown revision", and a mistyped command lands there too; `inferred` is what
+ * lets main() add the list of commands to that message.
  */
-function splitCommand(argv: string[]): { command: Command; rest: string[] } {
+function splitCommand(argv: string[]): { command: Command; rest: string[]; inferred: boolean } {
 	const first = argv[0];
-	if (first === undefined || first.startsWith("-")) return { command: "review", rest: argv };
-	if (!(COMMANDS as readonly string[]).includes(first)) {
-		throw new ReviewError(`unknown command: ${first} (available: ${COMMANDS.join(", ")})`, EXIT.usage);
+	if (first !== undefined && (COMMANDS as readonly string[]).includes(first)) {
+		return { command: first as Command, rest: argv.slice(1), inferred: false };
 	}
-	return { command: first as Command, rest: argv.slice(1) };
+	return { command: "review", rest: argv, inferred: first !== undefined && !first.startsWith("-") };
 }
 
 function packageVersion(): string {
@@ -107,14 +118,24 @@ function packageVersion(): string {
 	return "0.0.0";
 }
 
-/** Accepts both `3` and `T3` — turn labels carry the letter with the number. */
-function parseTurn(raw: string | undefined): number | null {
-	if (raw === undefined) return null;
-	const parsed = Number.parseInt(raw.replace(/^[Tt]/, ""), 10);
-	if (!Number.isInteger(parsed) || parsed < 1) {
-		throw new ReviewError(`--turn expects a turn number (e.g. 3 or T3), got: ${raw}`, EXIT.usage);
+/**
+ * The scope from the command line (ARCHITECTURE.md §4.2): nothing, `--staged`,
+ * one revision (since its merge base with HEAD) or two (a plain comparison).
+ * Whether the revisions exist is git's business, not the parser's.
+ */
+function parseScope(staged: boolean, positionals: string[]): ScopeRequest | null {
+	if (staged) {
+		if (positionals.length > 0) {
+			throw new ReviewError(`--staged takes no revisions, got: ${positionals.join(" ")}`, EXIT.usage);
+		}
+		return { id: "staged" };
 	}
-	return parsed;
+	const [base, head, ...extra] = positionals;
+	if (extra.length > 0) {
+		throw new ReviewError(`expected at most two revisions, got: ${positionals.join(" ")}`, EXIT.usage);
+	}
+	if (base === undefined) return null;
+	return head === undefined ? { id: "since", ref: base } : { id: "range", base, head };
 }
 
 function parseTimeout(raw: string | undefined): number {
@@ -139,18 +160,20 @@ function parseLauncher(raw: string | undefined): LauncherName | null {
 
 async function main(argv: string[]): Promise<ExitCode> {
 	let command: Command;
+	let inferred: boolean;
 	let values: Record<string, string | boolean | undefined>;
 	let positionals: string[];
 	try {
 		const split = splitCommand(argv);
 		command = split.command;
+		inferred = split.inferred;
 		const parsed = parseArgs({
 			args: split.rest,
 			options: OPTIONS[command],
 			strict: true,
-			// Only `dump` takes an argument; elsewhere a stray word is a mistake
-			// worth reporting rather than ignoring.
-			allowPositionals: command === "dump",
+			// `dump` takes its source, a review takes revisions; elsewhere a stray
+			// word is a mistake worth reporting rather than ignoring.
+			allowPositionals: command === "dump" || command === "review" || command === "open",
 		});
 		values = parsed.values;
 		positionals = parsed.positionals;
@@ -187,7 +210,8 @@ async function main(argv: string[]): Promise<ExitCode> {
 		const mode: RunMode = command === "open" ? "open" : command === "collect" ? "collect" : "auto";
 		const options: RunOptions = {
 			mode,
-			turn: parseTurn(typeof values.turn === "string" ? values.turn : undefined),
+			// `dump` spends its first positional on the source name; the rest is a scope.
+			scope: parseScope(values.staged === true, command === "dump" ? positionals.slice(1) : positionals),
 			timeoutMs: parseTimeout(typeof values.timeout === "string" ? values.timeout : undefined),
 			launcher: parseLauncher(typeof values.launcher === "string" ? values.launcher : undefined),
 			includeContext: values.context === true,
@@ -198,10 +222,13 @@ async function main(argv: string[]): Promise<ExitCode> {
 		if (command === "dump") {
 			const what = positionals[0];
 			if (what === undefined) {
-				throw new ReviewError("dump expects a source: current | turns | session | env", EXIT.usage);
+				throw new ReviewError("dump expects a source: scopes | session | env", EXIT.usage);
 			}
-			if (positionals.length > 1) {
-				throw new ReviewError(`dump takes one source, got: ${positionals.join(" ")}`, EXIT.usage);
+			if (what !== "scopes" && positionals.length > 1) {
+				throw new ReviewError(
+					`dump ${what} takes no further arguments, got: ${positionals.slice(1).join(" ")}`,
+					EXIT.usage,
+				);
 			}
 			return await dump(what, options);
 		}
@@ -210,6 +237,11 @@ async function main(argv: string[]): Promise<ExitCode> {
 	} catch (error) {
 		if (error instanceof ReviewError) {
 			log.error(error.message);
+			// The first word was read as a revision because it is not a command —
+			// which is exactly what a mistyped command looks like from here.
+			if (inferred && error.exitCode === EXIT.usage) {
+				log.info(`(\`${argv[0]}\` was read as a revision; the commands are: ${COMMANDS.join(", ")})`);
+			}
 			return error.exitCode;
 		}
 		log.error(error instanceof Error ? (error.stack ?? error.message) : String(error));

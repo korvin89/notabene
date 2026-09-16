@@ -13,10 +13,11 @@ around. This frames which gaps are worth closing and which are not.
 
 Our niche, not offered by general-purpose tools:
 
-- **Per-turn review.** General-purpose tools review VCS refs only; they have no
-  notion of an agent turn or conversation checkpoint. We reconstruct turns from
-  the Claude Code file-history and label them with prompt snippets — this is the
-  headline feature and the reason the project exists.
+- **The delivery loop.** Comments go back into the agent's context as an
+  instruction, and `/ntb` means a finished review wakes the agent by itself
+  (D29). This is the reason the project exists. Per-turn review was claimed as
+  the headline here until D31 removed it: it had been built, shipped, and never
+  used once.
 - **Graceful degradation.** Typical plugin launchers hard-fail when no supported
   terminal/multiplexer is detected. Our manual two-step flow (flow C) works in
   any terminal, always.
@@ -58,12 +59,11 @@ rich TUI with no external viewer dependency, package-manager distribution
 
 ### P1 — best value for cost
 
-2. **Arbitrary diff ranges.** Today the `current` source is hardcoded to
-   "working tree vs HEAD + untracked". Add base/against arguments
-   (`ntb main feature`, `HEAD~1 HEAD`) and `--staged`. Cost: low — a
-   parameter on `DiffSourceOptions`, the unified-patch parser in
-   `diff/current.ts` already does the heavy lifting; the changeset model is
-   untouched.
+2. ~~**Arbitrary diff ranges.**~~ Shipped as review scopes, 2026-09-16
+   (ARCHITECTURE.md §4.2, DECISIONS.md D31), in the same change that removed
+   per-turn review. It came out larger than this entry estimated: a run now
+   offers several scopes at once and the viewer switches between them, because
+   with `/ntb` the agent starts the review and the human cannot pass arguments.
 
 3. **tmux launcher (then Zellij).** The launcher chain (`Launcher` interface,
    detect-by-env) was built for this: one adapter ≈150 lines by analogy with
@@ -73,15 +73,15 @@ rich TUI with no external viewer dependency, package-manager distribution
 
 ### P2 — opens new ground, moderate cost
 
-4. **Host-agent seam (`AgentHost`) + a second agent in Current mode.** The
-   findings from the architecture review (2026-09-14): bundle session
-   resolution, the state dir (`claudeDir` → neutral name), the optional turns
-   source, the instruction strings, and the detach constant behind one
-   interface; select the host by detection like launchers. Other agents have no
-   file-history equivalent, so a second host starts Current-only — which the
-   degradation design already treats as a first-class mode, not a cut-down one.
-   Prerequisite: verify live that the target agent has an equivalent of the
-   "user-run shell command whose stdout enters the context" affordance.
+4. **Host-agent seam (`AgentHost`) + a second agent.** The findings from the
+   architecture review (2026-09-14): bundle session resolution, the state dir
+   (`claudeDir` → neutral name), the instruction strings, and the detach
+   constant behind one interface; select the host by detection like launchers.
+   Cheaper since D31 than when this was written: the diff no longer touches
+   Claude Code at all, so the seam is only about *where the session and the
+   state live*, not about what a host can show. Prerequisite: verify live that
+   the target agent has an equivalent of the "user-run shell command whose
+   stdout enters the context" affordance.
 
 5. **Plan review.** Review the agent's proposed plan (markdown) before any code
    exists, with the same annotate → revise loop. Feasible via a synthetic

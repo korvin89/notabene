@@ -1,4 +1,4 @@
-Review of the turn T3 diff ("fix the dagger balance, knockback…"), 4 comments.
+Review of the diff since main, 4 comments.
 Address each item; make the edits, then briefly summarize: what you changed,
 what you skipped and why. If an item is unclear, ask a clarifying question about it.
 
