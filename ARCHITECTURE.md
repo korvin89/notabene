@@ -72,7 +72,9 @@ src/
 │   ├── patch.ts        model → unified patch for the VCS adapter
 │   └── bin.ts          resolving the platform hunk binary, the extension directory, the ntb wrapper
 ├── hunk-ext/index.ts   hunk extension: VCS adapter, mirror, turn switching
-├── store/index.ts      CommentStore: pending cycle and machine-readable copies
+├── store/
+│   ├── index.ts        CommentStore: state directory, pending cycle, machine-readable copies
+│   └── migrate.ts      one-time move of a pre-D30 `<repo>/.claude/reviews/`
 └── delivery/index.ts   Delivery: batch formatter (§3.1) + write to stdout
 ```
 
@@ -83,7 +85,7 @@ Abstractions and their implementations:
 | `SessionSource` | `session/types.ts` | env, pid chain |
 | `DiffSource` | `model/diff.ts` | `current`, `turns` |
 | `Launcher` | `launcher/types.ts` | `herdr`, `kitty`, `manual` |
-| `CommentStore` | `model/review.ts` | `fileCommentStore` (files in `.claude/reviews/`) |
+| `CommentStore` | `model/review.ts` | `fileCommentStore` (files in the state directory, §3.2) |
 | `Delivery` | `delivery/index.ts` | `stdout` |
 
 ## 3. Contracts
@@ -104,10 +106,12 @@ what you skipped and why. If an item is unclear, ask a clarifying question about
 2. @src/balance.md:10 [question] (deleted line, old:10)
    Why was the crit item removed? It had been agreed on.
 
-Machine-readable copy: .claude/reviews/2026-09-13T20-15-31.json
+Machine-readable copy: /Users/x/.claude/notabene/-Users-x-games-roguelike/2026-09-13T20-15-31.json
 ```
 
 - Paths are relative to the repository root (§5.5), same order as in the mirror.
+  The copy at the tail is the exception: it lives outside the tree (§3.2), so
+  its path is absolute.
 - Comment type — `[question]` / `[change]` / `[blocker]`, set by a prefix in
   the body (`[q]`/`[c]`/`[b]`; the full words `[question]`/`[change]`/`[blocker]`
   are accepted too), because hunk has no types.
@@ -123,11 +127,31 @@ Machine-readable copy: .claude/reviews/2026-09-13T20-15-31.json
   `test/delivery.test.ts` move in the same change. Command names deliberately do
   not appear in it, which is why CLI surface changes are not contract changes.
 
-### 3.2. Machine-readable copy
+### 3.2. The state directory and the machine-readable copy
 
-`<repo>/.claude/reviews/<name>.json`, where the name is `createdAt` truncated
-to seconds, without the offset and with `:` → `-` (on collision — suffix `-2`,
-`-3`):
+Everything `ntb` writes lives in **one directory outside the reviewed tree**
+(D30):
+
+```
+<claudeDir>/notabene/<slug>/
+```
+
+`claudeDir` is Claude Code's state directory (`CLAUDE_CONFIG_DIR`, by default
+`~/.claude`), `slug` is its own project slug — the review root with every
+non-alphanumeric character replaced by a hyphen, the same `projectSlug()` that
+finds transcripts in `~/.claude/projects/` (§4.1). The key is the **review
+root**, not the session cwd: two sessions in one repository, one of them started
+in a subdirectory, must find each other's review (D14).
+
+Nothing is written into the repository — no `.gitignore` line to ask for, no
+untracked files, nothing under a file watcher. A pre-D30 `<repo>/.claude/reviews/`
+is moved here on the first run and removed (`store/migrate.ts`).
+
+The directory holds the copies described below and the session files of §3.3.
+
+**Machine-readable copy** — `<stateDir>/<name>.json`, where the name is
+`createdAt` truncated to seconds, without the offset and with `:` → `-` (on
+collision — suffix `-2`, `-3`):
 
 ```json
 {
@@ -149,9 +173,14 @@ to seconds, without the offset and with `:` → `-` (on collision — suffix `-2
 the UI doesn't fill them. `hunk` is always `null` — the extension doesn't
 mirror the hunk index.
 
+The copies are not history for its own sake and nothing reads them back: they
+are the fallback for a batch that never reached the agent (stdout swallowed, the
+task file unread), which is why they survive the cleanup below. Hence no
+rotation either — one is 0.5–1.2 KB.
+
 ### 3.3. Handoff and the comment mirror
 
-An internal CLI ↔ extension contract, both files in `<repo>/.claude/reviews/`:
+An internal CLI ↔ extension contract, both files in the state directory (§3.2):
 
 - **`handoff.json`** is written by the CLI before launching the viewer: `root`,
   `notesPath`, `hunkBin`, `activeId` and all changesets (label, unified patch,
@@ -308,7 +337,8 @@ where a development checkout is never on `PATH` and a stranger's `ntb` might be.
 
 - **Review root** — the git repository root (`git rev-parse --show-toplevel`
   from the session cwd); outside a repository — the cwd itself. Changeset paths
-  and batch references are computed from it; `.claude/reviews/` lives in it.
+  and batch references are computed from it, and it is the key of the state
+  directory (§3.2) — which itself lives elsewhere.
 - **The detach ceiling belongs to the caller, not to us**: 120 s for a
   `!`-command (the `BASH_DEFAULT_TIMEOUT_MS` default, `BANG_DETACH_MS`), and the
   `timeout` the agent passes for `/ntb` — 600 s, the Bash tool's maximum. Past it
@@ -360,6 +390,7 @@ Must not be broken; most have a guard.
 | Exit codes only from `EXIT` (`src/io.ts`) | §3.4 |
 | Tests that run `./ntb` must set `cwd` | shared temp directory by default in `test/cli.test.ts` |
 | Empty review → empty stdout | e2e in `test/cli.test.ts` |
+| Nothing of ours is written into the reviewed repository | `tree()` assertions in `test/cli.test.ts` |
 | Unfamiliar file-history schema → degradation to Current with a warning | `test/diff-turns.test.ts` |
 
 ## 7. Distribution

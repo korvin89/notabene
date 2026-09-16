@@ -4,8 +4,8 @@
 
 import type { ReviewDocument } from "../../src/model/review.ts";
 
-/** The path printed at the tail of the reference batch. */
-export const FIXTURE_JSON_PATH = ".claude/reviews/2026-09-13T20-15-31.json";
+/** The path printed at the tail of the reference batch — absolute since D30. */
+export const FIXTURE_JSON_PATH = "/Users/x/.claude/notabene/-Users-x-games-roguelike/2026-09-13T20-15-31.json";
 
 export function reviewTurnFixture(): ReviewDocument {
 	return {

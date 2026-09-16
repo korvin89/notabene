@@ -75,15 +75,16 @@ function contextLines(handoff: HunkHandoff | null, note: MirrorNote, side: "old"
 }
 
 /**
- * Collection shared by all launchers: mirror + handoff from the review directory.
+ * Collection shared by all launchers: mirror + handoff from the review state
+ * directory (`<claudeDir>/notabene/<slug>/`, D30).
  * A missing mirror is not an error (the viewer may never have started) but an
  * empty review with a warning: empty stdout is a normal outcome per the spec.
  */
-export function collectComments(cwd: string): ReviewComment[] {
+export function collectComments(dir: string): ReviewComment[] {
 	// Every review has its own mirror name, and the handoff knows it; without a
 	// handoff the legacy name remains (a session started by a previous version).
-	const handoff = readHandoff(cwd);
-	const notes = readMirrorNotes(handoff?.notesPath ?? notesPath(cwd));
+	const handoff = readHandoff(dir);
+	const notes = readMirrorNotes(handoff?.notesPath ?? notesPath(dir));
 	if (notes === null) {
 		log.warn(
 			"comment mirror not found — the viewer never started or the extension "

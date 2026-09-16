@@ -72,12 +72,13 @@ The full list with its guards — ARCHITECTURE.md §6. In short:
 - **Do not run a bare `./ntb` anywhere while working here** — only `dump` and
   `collect` are safe. Changing directory does not protect you: the review root
   comes from the *session's* cwd, not the process's (`run.ts` →
-  `reviewRoot(session.cwd)`), so a run from `/tmp` still prepares a review in
-  this repository. It leaves `pending.json` and a megabyte-sized `handoff.json`
-  behind, opens a viewer, and blocks the next `!ntb` with "unfinished review".
-  Recovery: `./ntb collect` — it dismisses an empty session silently and prints
-  nothing to stdout. (Learned the hard way on 2026-09-14, from a `/tmp` run
-  believed to be harmless.)
+  `reviewRoot(session.cwd)`), so a run from `/tmp` still prepares a review of
+  this repository. It opens a viewer and blocks the next `!ntb` with "unfinished
+  review"; the leftover `pending.json` and the megabyte-sized `handoff.json` land
+  in `~/.claude/notabene/<slug>/`, not in the working tree (D30). Recovery:
+  `./ntb collect` — it dismisses an empty session silently and prints nothing to
+  stdout. (Learned the hard way on 2026-09-14, from a `/tmp` run believed to be
+  harmless.)
 - **One writer per tree.** Don't give the reviewer subagent write access
   (DECISIONS.md D24).
 - **Do not rewrite the spike docs in `docs/` or the probes in `scripts/`** —

@@ -48,7 +48,7 @@ function makeLauncher(herdrBin: string): { launcher: Launcher; env: NodeJS.Proce
 		NOTABENE_HERDR: herdrBin,
 		NOTABENE_HUNK: "/opt/hunk/bin/hunk",
 	};
-	return { launcher: herdrLauncher({ detected: detectEnvironment(env), cwd: dir }), env };
+	return { launcher: herdrLauncher({ detected: detectEnvironment(env), stateDir: join(dir, "state") }), env };
 }
 
 async function openDefault(launcher: Launcher, env: NodeJS.ProcessEnv): Promise<void> {

@@ -55,7 +55,7 @@ export interface ReviewDocument {
  * snippet would be known at collection time.
  */
 export interface CommentStore {
-	/** directory of machine-readable copies (by default `<repo>/.claude/reviews`) */
+	/** the review state directory — `<claudeDir>/notabene/<slug>/`, outside the tree (D30) */
 	readonly dir: string;
 	loadPending(): Promise<ReviewDocument | null>;
 	savePending(doc: ReviewDocument): Promise<void>;

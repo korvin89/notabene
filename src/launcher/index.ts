@@ -3,7 +3,6 @@
 // herdr — flow A (./herdr.ts), kitty — flow B (./kitty.ts), manual — flow C
 // (./manual.ts). Shared comment collection — src/hunk/notes.ts (collectComments).
 
-import process from "node:process";
 import { log } from "../io.ts";
 import { detectEnvironment } from "./detect.ts";
 import { herdrLauncher } from "./herdr.ts";
@@ -57,8 +56,8 @@ const FACTORIES: Record<LauncherName, (ctx: LauncherContext) => Launcher> = {
 
 export interface SelectOptions {
 	env?: NodeJS.ProcessEnv;
-	/** review root — handoff and the comment mirror are resolved relative to it */
-	cwd?: string;
+	/** review state directory — where the handoff and the comment mirror live (D30) */
+	stateDir: string;
 	/** forced choice (`--launcher`); detection is ignored in that case */
 	force?: LauncherName;
 }
@@ -68,16 +67,16 @@ export interface SelectOptions {
  * the detection chain is not consulted. The single point where the core needs
  * a concrete fallback adapter — so that run.ts does not name it directly.
  */
-export function explicitOpenLauncher(options: SelectOptions = {}): Launcher {
+export function explicitOpenLauncher(options: SelectOptions): Launcher {
 	return manualLauncher({
 		detected: detectEnvironment(options.env ?? {}),
-		cwd: options.cwd ?? process.cwd(),
+		stateDir: options.stateDir,
 	});
 }
 
-export function selectLauncher(options: SelectOptions = {}): Launcher {
+export function selectLauncher(options: SelectOptions): Launcher {
 	const detected = detectEnvironment(options.env ?? {});
-	const ctx: LauncherContext = { detected, cwd: options.cwd ?? process.cwd() };
+	const ctx: LauncherContext = { detected, stateDir: options.stateDir };
 
 	if (options.force !== undefined) {
 		const availability = detected[options.force];

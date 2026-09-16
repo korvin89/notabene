@@ -80,15 +80,15 @@ curl -fsSL <url>/install.sh | sh -s -- --ref v0.2.0   # or straight through the 
 
 ### In the repositories you review
 
-Add to `.gitignore`:
+Nothing. `ntb` writes nothing into the repository: review state and the
+machine-readable copies live in `~/.claude/notabene/<project>/`, next to
+Claude Code's own per-project data. No `.gitignore` line, nothing to commit by
+accident, nothing for a file watcher to react to.
 
-```
-.claude/reviews/
-```
-
-— that's where machine-readable review copies and review-session files go. The
-directory won't get into the diff even without this line (`ntb` always excludes
-it), but otherwise it will keep asking to be committed.
+If you reviewed with `ntb` 0.2.x or earlier, the first run moves the old
+`.claude/reviews/` out of the repository and removes the directory — including
+an unfinished review, so a viewer left open before the upgrade still delivers
+its comments.
 
 ### One-time kitty.conf edit (for the "single command" flow in kitty)
 
@@ -155,7 +155,7 @@ what you skipped and why. If an item is unclear, ask a clarifying question about
 2. @src/balance.md:10 [question] (deleted line, old:10)
    Why was the crit item removed? It had been agreed on.
 
-Machine-readable copy: .claude/reviews/2026-09-13T20-15-31.json
+Machine-readable copy: /Users/x/.claude/notabene/-Users-x-games-roguelike/2026-09-13T20-15-31.json
 ```
 
 An empty review (no changes or no comments) — empty stdout, Claude does nothing.
@@ -224,9 +224,10 @@ everywhere:            --verbose       diagnostics to stderr
   collect` first. The viewer wait is 4 hours by default, so a viewer opened and
   forgotten keeps refusing for that long; `collect` ends it at any point.
 - **Everything is computed from the git repository root**, not the session
-  directory: `.claude/reviews/` lives there, batch paths (`@pkg/deep/file.ts`)
-  come from there — exactly as git itself prints them. If Claude Code runs in a
-  subdirectory, references have to be read relative to the repository root.
+  directory: batch paths (`@pkg/deep/file.ts`) come from there — exactly as git
+  itself prints them — and so does the key under which the review state is
+  stored. If Claude Code runs in a subdirectory, references have to be read
+  relative to the repository root.
 - **No "file viewed" marks** (hunk doesn't support them; deliberately cut from
   the MVP).
 - A batch longer than ~25k characters is not trimmed by comments — only context

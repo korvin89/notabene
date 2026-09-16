@@ -21,4 +21,4 @@ what you skipped and why. If an item is unclear, ask a clarifying question about
    >     migrate(profile);
    >   }
 
-Machine-readable copy: .claude/reviews/2026-09-13T20-15-31.json
+Machine-readable copy: /Users/x/.claude/notabene/-Users-x-games-roguelike/2026-09-13T20-15-31.json

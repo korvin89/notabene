@@ -137,7 +137,7 @@ export function kittyLauncher(ctx: LauncherContext): Launcher {
 				if (!(await windowAlive())) {
 					// A viewer that failed to start dies instantly and leaves no trace
 					// of the extension — this is not a "review with no comments".
-					if (Date.now() - openedAt < STARTUP_MS && !existsSync(mirrorPath(ctx.cwd))) {
+					if (Date.now() - openedAt < STARTUP_MS && !existsSync(mirrorPath(ctx.stateDir))) {
 						throw new ReviewError(
 							"the kitty tab closed immediately — the viewer did not start. Most often "
 								+ "the hunk binary was not found: run `npm install` in the notabene directory.",
@@ -156,7 +156,7 @@ export function kittyLauncher(ctx: LauncherContext): Launcher {
 		},
 
 		async collect(): Promise<ReviewComment[]> {
-			return collectComments(ctx.cwd);
+			return collectComments(ctx.stateDir);
 		},
 	};
 }
